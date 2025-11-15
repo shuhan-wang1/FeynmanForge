@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Validation Test - FeynmanForge</title>
+    <style>
+        body {
+            font-family: 'Courier New', monospace;
+            background: #0a0a0a;
+            color: #00ff00;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 { color: #00ffff; border-bottom: 2px solid #00ffff; padding-bottom: 10px; }
+        h2 { color: #ffff00; margin-top: 30px; }
+        .test-case {
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .test-case h3 {
+            color: #ff00ff;
+            margin-top: 0;
+        }
+        .shape-info {
+            background: #0a0a0a;
+            border-left: 3px solid #00ff00;
+            padding: 10px;
+            margin: 10px 0;
+            font-size: 12px;
+        }
+        .warning {
+            color: #ffaa00;
+            background: #332200;
+            padding: 10px;
+            border-left: 3px solid #ffaa00;
+            margin: 10px 0;
+        }
+        .error {
+            color: #ff0000;
+            background: #330000;
+            padding: 10px;
+            border-left: 3px solid #ff0000;
+            margin: 10px 0;
+        }
+        .success {
+            color: #00ff00;
+            background: #003300;
+            padding: 10px;
+            border-left: 3px solid #00ff00;
+            margin: 10px 0;
+        }
+        button {
+            background: #00ffff;
+            color: #000;
+            border: none;
+            padding: 10px 20px;
+            font-size: 14px;
+            cursor: pointer;
+            border-radius: 3px;
+            margin: 5px;
+            font-weight: bold;
+        }
+        button:hover {
+            background: #00aaaa;
+        }
+        pre {
+            background: #000;
+            padding: 10px;
+            border: 1px solid #333;
+            overflow-x: auto;
+            font-size: 11px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 FeynmanForge Validation Test Suite</h1>
+    <p>测试 Gemini 返回的数据是否正确保存和验证</p>
+
+    <div style="margin: 20px 0;">
+        <button onclick="runAllTests()">▶️ 运行所有测试</button>
+        <button onclick="clearResults()">🗑️ 清空结果</button>
+    </div>
+
+    <div id="results"></div>
+
+    <script>
+        // 🔧 从 Gemini 返回的真实数据
+        const GEMINI_RESPONSE = {
+            "valid": true,
+            "interaction_type": "strong",
+            "diagrams": [
+                {
+                    "name": "t-channel",
+                    "vertices": [
+                        {"id": "v1", "position": {"x": 80, "y": 189.5}},
+                        {"id": "v2", "position": {"x": 80, "y": 389.5}},
+                        {"id": "v3", "position": {"x": 303, "y": 189.5}},
+                        {"id": "v4", "position": {"x": 303, "y": 389.5}},
+                        {"id": "v5", "position": {"x": 526, "y": 189.5}},
+                        {"id": "v6", "position": {"x": 526, "y": 389.5}}
+                    ],
+                    "lines": [
+                        {"from": "v1", "to": "v3", "particle": {"id": "u", "category": "fermion", "group": "quark_u", "isAnti": false, "color": "red"}},
+                        {"from": "v2", "to": "v4", "particle": {"id": "u", "category": "fermion", "group": "quark_u", "isAnti": true, "color": "anti-red"}},
+                        {"from": "v3", "to": "v4", "particle": {"id": "u", "category": "fermion", "group": "quark_u", "isAnti": false, "color": "blue", "isVirtual": true}},
+                        {"from": "v3", "to": "v5", "particle": {"id": "gluon", "category": "boson", "gluonColor": 1}},
+                        {"from": "v4", "to": "v6", "particle": {"id": "gluon", "category": "boson", "gluonColor": 4}}
+                    ]
+                }
+            ]
+        };
+
+        // 🔧 模拟 convertToShapes 函数（当前有 BUG 的版本）
+        function convertToShapes_BUGGY(geminiResponse) {
+            const shapes = [];
+            const diagram = geminiResponse.diagrams[0];
+            
+            const vertexMap = {};
+            diagram.vertices.forEach(v => {
+                vertexMap[v.id] = { x: v.position.x, y: v.position.y };
+            });
+            
+            diagram.lines.forEach((line, idx) => {
+                const p1 = vertexMap[line.from];
+                const p2 = vertexMap[line.to];
+                
+                const particle = line.particle;
+                const props = {
+                    category: particle.category,
+                    particleId: particle.id
+                };
+                
+                // 添加额外属性
+                if (particle.group) props.group = particle.group;
+                if (particle.color) {
+                    props.color = particle.color;
+                }
+                if (particle.gluonColor !== undefined) props.gluonColor = particle.gluonColor;
+                
+                // ⚠️ BUG: 交换坐标但不保存 isAnti！
+                let finalP1 = p1;
+                let finalP2 = p2;
+                
+                if (particle.category === 'fermion' && particle.isAnti) {
+                    finalP1 = p2;
+                    finalP2 = p1;
+                    // ❌ 没有保存 props.isAnti = true!
+                } else if (particle.category === 'fermion') {
+                    if (p1.x > p2.x) {
+                        finalP1 = p2;
+                        finalP2 = p1;
+                    }
+                }
+                
+                let type = particle.category === 'fermion' ? 'fermion' : 
+                           particle.id === 'gluon' ? 'gluon' : 'photon';
+                
+                shapes.push({
+                    id: Date.now() + idx * 10,
+                    type: type,
+                    p1: { x: finalP1.x, y: finalP1.y },
+                    p2: { x: finalP2.x, y: finalP2.y },
+                    props: props
+                });
+            });
+            
+            return shapes;
+        }
+
+        // 🔧 修复后的版本
+        function convertToShapes_FIXED(geminiResponse) {
+            const shapes = [];
+            const diagram = geminiResponse.diagrams[0];
+            
+            const vertexMap = {};
+            diagram.vertices.forEach(v => {
+                vertexMap[v.id] = { x: v.position.x, y: v.position.y };
+            });
+            
+            diagram.lines.forEach((line, idx) => {
+                const p1 = vertexMap[line.from];
+                const p2 = vertexMap[line.to];
+                
+                const particle = line.particle;
+                const props = {
+                    category: particle.category,
+                    particleId: particle.id
+                };
+                
+                // ✅ 保存所有 Gemini 提供的属性
+                if (particle.group) props.group = particle.group;
+                if (particle.isAnti !== undefined) props.isAnti = particle.isAnti;
+                if (particle.isVirtual !== undefined) props.isVirtual = particle.isVirtual;
+                if (particle.color) props.color = particle.color;
+                if (particle.gluonColor !== undefined) props.gluonColor = particle.gluonColor;
+                
+                // ✅ 坐标处理：只调整方向，不影响属性
+                let finalP1 = p1;
+                let finalP2 = p2;
+                
+                if (particle.category === 'fermion' && particle.isAnti) {
+                    // 反粒子：交换坐标使箭头向左
+                    finalP1 = p2;
+                    finalP2 = p1;
+                } else if (particle.category === 'fermion') {
+                    // 正粒子：确保箭头向右
+                    if (p1.x > p2.x) {
+                        finalP1 = p2;
+                        finalP2 = p1;
+                    }
+                }
+                
+                let type = particle.category === 'fermion' ? 'fermion' : 
+                           particle.id === 'gluon' ? 'gluon' : 'photon';
+                
+                shapes.push({
+                    id: Date.now() + idx * 10,
+                    type: type,
+                    p1: { x: finalP1.x, y: finalP1.y },
+                    p2: { x: finalP2.x, y: finalP2.y },
+                    props: props
+                });
+            });
+            
+            return shapes;
+        }
+
+        // 🔧 简化的色荷验证（模拟真实的 feynman-logic.js 逻辑）
+        function validateColorConservation(shapes) {
+            const vertices = {};
+            const warnings = [];
+            
+            // 构建顶点
+            shapes.forEach(shape => {
+                const key1 = `${shape.p1.x},${shape.p1.y}`;
+                const key2 = `${shape.p2.x},${shape.p2.y}`;
+                
+                if (!vertices[key1]) vertices[key1] = { x: shape.p1.x, y: shape.p1.y, incoming: [], outgoing: [] };
+                if (!vertices[key2]) vertices[key2] = { x: shape.p2.x, y: shape.p2.y, incoming: [], outgoing: [] };
+                
+                // 确定流向
+                const isAntiparticle = shape.props.isAnti || false;
+                const flowForward = !isAntiparticle; // 粒子从 p1→p2，反粒子从 p2→p1
+                
+                const particleData = {
+                    ...shape.props,
+                    shapeId: shape.id
+                };
+                
+                if (flowForward) {
+                    vertices[key1].outgoing.push(particleData);
+                    vertices[key2].incoming.push(particleData);
+                } else {
+                    vertices[key1].incoming.push(particleData);
+                    vertices[key2].outgoing.push(particleData);
+                }
+            });
+            
+            // 验证每个顶点的色荷守恒
+            Object.entries(vertices).forEach(([vertexKey, v]) => {
+                const totalLines = v.incoming.length + v.outgoing.length;
+                if (totalLines < 2) return; // 跳过孤立点
+                
+                let colorBalance = { 'red': 0, 'green': 0, 'blue': 0 };
+                
+                // ✅ 修复版：正确处理反色荷
+                v.incoming.forEach(p => {
+                    if (p.color) {
+                        if (p.color.startsWith('anti-')) {
+                            // 反色荷流入 = 负贡献
+                            const baseColor = p.color.replace('anti-', '');
+                            colorBalance[baseColor] -= 1;
+                        } else {
+                            // 正色荷流入
+                            colorBalance[p.color] += 1;
+                        }
+                    }
+                    if (p.gluonColor !== null && p.gluonColor !== undefined) {
+                        const gc = GLUON_COLORS[p.gluonColor];
+                        if (gc) {
+                            colorBalance[gc.in] += 1;
+                            const baseColor = gc.out.replace('anti-', '');
+                            colorBalance[baseColor] -= 1;
+                        }
+                    }
+                });
+                
+                v.outgoing.forEach(p => {
+                    if (p.color) {
+                        if (p.color.startsWith('anti-')) {
+                            // 反色荷流出 = 正贡献
+                            const baseColor = p.color.replace('anti-', '');
+                            colorBalance[baseColor] += 1;
+                        } else {
+                            // 正色荷流出
+                            colorBalance[p.color] -= 1;
+                        }
+                    }
+                    if (p.gluonColor !== null && p.gluonColor !== undefined) {
+                        const gc = GLUON_COLORS[p.gluonColor];
+                        if (gc) {
+                            colorBalance[gc.in] -= 1;
+                            const baseColor = gc.out.replace('anti-', '');
+                            colorBalance[baseColor] += 1;
+                        }
+                    }
+                });
+                
+                // 检查色荷平衡
+                let violation = false;
+                for (let color in colorBalance) {
+                    if (Math.abs(colorBalance[color]) > 0.01) {
+                        violation = true;
+                        break;
+                    }
+                }
+                
+                if (violation) {
+                    warnings.push({
+                        vertex: vertexKey,
+                        colorBalance,
+                        incoming: v.incoming.map(p => `${p.particleId}(${p.color || p.gluonColor})`),
+                        outgoing: v.outgoing.map(p => `${p.particleId}(${p.color || p.gluonColor})`)
+                    });
+                }
+            });
+            
+            return warnings;
+        }
+        
+        // 胶子色荷映射
+        const GLUON_COLORS = {
+            0: { in: 'red', out: 'anti-green', label: 'rḡ' },
+            1: { in: 'red', out: 'anti-blue', label: 'rb̄' },
+            2: { in: 'green', out: 'anti-red', label: 'gr̄' },
+            3: { in: 'green', out: 'anti-blue', label: 'gb̄' },
+            4: { in: 'blue', out: 'anti-red', label: 'br̄' },
+            5: { in: 'blue', out: 'anti-green', label: 'bḡ' }
+        };
+
+        // 🔧 运行测试
+        function runAllTests() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '';
+            
+            // Test 1: 检查有 BUG 的版本
+            addTestCase('Test 1: 当前代码（有BUG）- 未保存 isAnti', () => {
+                const shapes = convertToShapes_BUGGY(GEMINI_RESPONSE);
+                
+                let html = '<h4>生成的 Shapes:</h4>';
+                shapes.forEach((s, i) => {
+                    const isAntiExpected = [false, true, false, false, false][i];
+                    const match = s.props.isAnti === isAntiExpected ? '✅' : '❌';
+                    html += `<div class="shape-info">
+                        <strong>Shape ${i+1}:</strong> ${s.props.particleId} (${s.type})<br>
+                        props.isAnti: <strong>${s.props.isAnti}</strong> ${match} (expected: ${isAntiExpected})<br>
+                        props.color: <strong>${s.props.color || 'undefined'}</strong><br>
+                        props.isVirtual: <strong>${s.props.isVirtual || false}</strong><br>
+                        p1: (${s.p1.x}, ${s.p1.y}) → p2: (${s.p2.x}, ${s.p2.y})
+                    </div>`;
+                });
+                
+                const warnings = validateColorConservation(shapes);
+                html += `<h4>验证结果:</h4>`;
+                if (warnings.length > 0) {
+                    warnings.forEach(w => {
+                        html += `<div class="warning">
+                            ⚠️ 顶点 ${w.vertex}: 色荷不守恒<br>
+                            Color Balance: red=${w.colorBalance.red}, green=${w.colorBalance.green}, blue=${w.colorBalance.blue}<br>
+                            Incoming: ${w.incoming.join(', ')}<br>
+                            Outgoing: ${w.outgoing.join(', ')}
+                        </div>`;
+                    });
+                    html += '<div class="error">❌ 验证失败！因为 isAnti 未保存，流向判断错误</div>';
+                } else {
+                    html += '<div class="success">✅ 色荷守恒验证通过</div>';
+                }
+                
+                return html;
+            });
+            
+            // Test 2: 检查修复后的版本
+            addTestCase('Test 2: 修复后的代码 - 正确保存 isAnti', () => {
+                const shapes = convertToShapes_FIXED(GEMINI_RESPONSE);
+                
+                let html = '<h4>生成的 Shapes:</h4>';
+                shapes.forEach((s, i) => {
+                    const isAntiExpected = [false, true, false, false, false][i];
+                    const match = s.props.isAnti === isAntiExpected ? '✅' : '❌';
+                    html += `<div class="shape-info">
+                        <strong>Shape ${i+1}:</strong> ${s.props.particleId} (${s.type})<br>
+                        props.isAnti: <strong>${s.props.isAnti}</strong> ${match} (expected: ${isAntiExpected})<br>
+                        props.color: <strong>${s.props.color || 'undefined'}</strong><br>
+                        props.isVirtual: <strong>${s.props.isVirtual || false}</strong> ✅<br>
+                        p1: (${s.p1.x}, ${s.p1.y}) → p2: (${s.p2.x}, ${s.p2.y})
+                    </div>`;
+                });
+                
+                const warnings = validateColorConservation(shapes);
+                html += `<h4>验证结果:</h4>`;
+                if (warnings.length > 0) {
+                    warnings.forEach(w => {
+                        html += `<div class="warning">
+                            ⚠️ 顶点 ${w.vertex}: 色荷不守恒<br>
+                            Color Balance: red=${w.colorBalance.red}, green=${w.colorBalance.green}, blue=${w.colorBalance.blue}<br>
+                            Incoming: ${w.incoming.join(', ')}<br>
+                            Outgoing: ${w.outgoing.join(', ')}
+                        </div>`;
+                    });
+                    html += '<div class="error">❌ 还有问题需要排查</div>';
+                } else {
+                    html += '<div class="success">✅ 色荷守恒验证通过！所有顶点色荷平衡</div>';
+                }
+                
+                return html;
+            });
+            
+            // Test 3: 对比分析
+            addTestCase('Test 3: 关键差异对比', () => {
+                const buggy = convertToShapes_BUGGY(GEMINI_RESPONSE);
+                const fixed = convertToShapes_FIXED(GEMINI_RESPONSE);
+                
+                let html = '<h4>反夸克 ū (Shape 2) 的属性对比:</h4>';
+                html += `<pre>
+📍 Gemini 返回:
+  id: "u"
+  isAnti: true ✅
+  color: "anti-red" ✅
+
+📍 当前代码保存的 props (BUGGY):
+  particleId: "${buggy[1].props.particleId}"
+  isAnti: ${buggy[1].props.isAnti} ❌ (undefined!)
+  color: "${buggy[1].props.color}"
+
+📍 修复后代码保存的 props (FIXED):
+  particleId: "${fixed[1].props.particleId}"
+  isAnti: ${fixed[1].props.isAnti} ✅
+  color: "${fixed[1].props.color}"
+</pre>`;
+                
+                html += '<h4>问题根源:</h4>';
+                html += '<div class="error">❌ 当前代码在 convertToShapes() 中交换了坐标，但<strong>没有保存 particle.isAnti 到 props.isAnti</strong></div>';
+                html += '<div class="error">❌ 当前代码<strong>没有保存 particle.isVirtual 到 props.isVirtual</strong></div>';
+                html += '<div class="success">✅ 修复方法：在设置 props 时添加 <code>if (particle.isAnti !== undefined) props.isAnti = particle.isAnti;</code></div>';
+                
+                return html;
+            });
+        }
+
+        function addTestCase(title, testFunc) {
+            const resultsDiv = document.getElementById('results');
+            const caseDiv = document.createElement('div');
+            caseDiv.className = 'test-case';
+            caseDiv.innerHTML = `<h3>${title}</h3>` + testFunc();
+            resultsDiv.appendChild(caseDiv);
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        // 自动运行
+        window.addEventListener('load', () => {
+            runAllTests();
+        });
+    </script>
+</body>
+</html>

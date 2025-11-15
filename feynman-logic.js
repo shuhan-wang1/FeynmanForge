@@ -42,6 +42,18 @@ const i18n = {
         'selected-multi': '已选中 {count} 个粒子',
         'empty-select': '请选择一个粒子或工具',
         'boson-w-direction': 'L→R = W⁻, R→L = W⁺',
+        // AI 相关
+        'ai-generate': 'AI 生成',
+        'ai-title': '🤖 AI 自动生成费曼图',
+        'api-key-notice': '首次使用需要设置 Gemini API Key',
+        'api-key-instruction': '获取方式：访问 Google AI Studio 免费获取',
+        'api-key-label': 'Gemini API Key',
+        'save-key': '保存',
+        'reaction-label': '输入反应式',
+        'reaction-examples': '示例：',
+        'generate-button': '🎨 生成费曼图',
+        'ai-loading-text': 'AI 正在思考中...',
+        'ai-success': '生成成功！',
         'help-content': `
             <div class="bg-cyan-900/30 p-2 rounded border border-cyan-700">
                 <div class="font-bold text-cyan-300 mb-1 text-xs">🔴 严格守恒定律</div>
@@ -445,6 +457,23 @@ function draw() {
         drawShape(tempShape);
         ctx.globalAlpha = 1.0;
     }
+    
+    // 自动保存到画布管理器（节流：仅在没有草稿时保存）
+    if (!draftLine && !window._disableAutoSave) {
+        saveToCanvasManager();
+    }
+}
+
+// 节流保存：避免频繁保存
+let saveTimeout = null;
+function saveToCanvasManager() {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+        const canvasManager = window.getCanvasManager();
+        if (canvasManager && !window._disableAutoSave) {
+            canvasManager.updateCurrentCanvas(shapes);
+        }
+    }, 500); // 500ms 后保存
 }
 
 function drawShape(s) {
@@ -1018,13 +1047,11 @@ function validatePhysics() {
             conservationViolated = true;
         }
         
-        // 7. 禁止规则：胶子只能与夸克耦合
-        if (hasGluon && !hasQuark) {
-            msg.push(`胶子只能与夸克相互作用`);
-            conservationViolated = true;
-        }
+        // 7. 胶子耦合规则：胶子可以与夸克耦合，也可以自耦合（3胶子顶点、4胶子顶点）
+        // ✅ 移除了错误的"胶子只能与夸克耦合"规则
+        // QCD 允许胶子自相互作用！
         
-        // 8. 色荷守恒 (增强版 - 更严格的检查)
+        // 8. 色荷守恒 (修复版 - 正确处理反色荷)
         if (hasGluon || hasQuark) {
             let colorViolation = false;
             let colorBalance = { 'red': 0, 'green': 0, 'blue': 0 };
@@ -1032,15 +1059,21 @@ function validatePhysics() {
             // 计算净色荷流入
             v.incoming.forEach(p => {
                 if (p.color) {
-                    colorBalance[p.color] = (colorBalance[p.color] || 0) + 1;
+                    // ✅ 修复：正确处理反色荷
+                    if (p.color.startsWith('anti-')) {
+                        // 反色荷流入 = 正色荷流出（负贡献）
+                        const baseColor = p.color.replace('anti-', '');
+                        colorBalance[baseColor] = (colorBalance[baseColor] || 0) - 1;
+                    } else {
+                        // 正色荷流入
+                        colorBalance[p.color] = (colorBalance[p.color] || 0) + 1;
+                    }
                 }
                 if (p.gluonColor !== null && p.gluonColor !== undefined) {
                     const gc = GLUON_COLORS[p.gluonColor];
                     if (gc) {
-                        // 胶子流入：带来 gc.in 色荷，同时带来 gc.out 的反色荷
-                        // 例如 g(rḡ) 流入 = 带来 red + anti-green
+                        // 胶子流入：带来正色荷 gc.in 和反色荷 gc.out
                         colorBalance[gc.in] = (colorBalance[gc.in] || 0) + 1;
-                        // anti-green 意味着 green 的反色，所以减去 green
                         const baseColor = gc.out.replace('anti-', '');
                         colorBalance[baseColor] = (colorBalance[baseColor] || 0) - 1;
                     }
@@ -1050,15 +1083,21 @@ function validatePhysics() {
             // 计算净色荷流出
             v.outgoing.forEach(p => {
                 if (p.color) {
-                    colorBalance[p.color] = (colorBalance[p.color] || 0) - 1;
+                    // ✅ 修复：正确处理反色荷
+                    if (p.color.startsWith('anti-')) {
+                        // 反色荷流出 = 正色荷流入（正贡献）
+                        const baseColor = p.color.replace('anti-', '');
+                        colorBalance[baseColor] = (colorBalance[baseColor] || 0) + 1;
+                    } else {
+                        // 正色荷流出
+                        colorBalance[p.color] = (colorBalance[p.color] || 0) - 1;
+                    }
                 }
                 if (p.gluonColor !== null && p.gluonColor !== undefined) {
                     const gc = GLUON_COLORS[p.gluonColor];
                     if (gc) {
-                        // 胶子流出：带走 gc.in 色荷，同时带走 gc.out 的反色荷
-                        // 例如 g(rḡ) 流出 = 带走 red + anti-green
+                        // 胶子流出：带走正色荷 gc.in 和反色荷 gc.out
                         colorBalance[gc.in] = (colorBalance[gc.in] || 0) - 1;
-                        // 带走 anti-green = 带来 green
                         const baseColor = gc.out.replace('anti-', '');
                         colorBalance[baseColor] = (colorBalance[baseColor] || 0) + 1;
                     }
@@ -1069,6 +1108,7 @@ function validatePhysics() {
             for (let color in colorBalance) {
                 if (Math.abs(colorBalance[color]) > 0.01) {
                     colorViolation = true;
+                    console.log(`❌ 色荷不守恒 at 顶点(${v.x.toFixed(0)},${v.y.toFixed(0)}):`, colorBalance);
                     break;
                 }
             }
@@ -1522,4 +1562,209 @@ document.getElementById('btn-lang').onclick = () => {
 
 document.getElementById('btn-back-to-start').onclick = () => {
     window.location.href = 'start.html';
+};
+
+// ===== AI 自动生成功能 =====
+
+// 打开 AI 面板
+document.getElementById('btn-ai-generate')?.addEventListener('click', () => {
+    const aiPanel = document.getElementById('ai-panel');
+    aiPanel.classList.remove('hidden');
+    
+    // 从 localStorage 加载已保存的 API Key
+    const savedKey = localStorage.getItem('gemini_api_key');
+    if (savedKey) {
+        document.getElementById('input-api-key').value = savedKey;
+        window.FeynmanDiagramGenerator.setAPIKey(savedKey);
+    }
+});
+
+// 关闭 AI 面板
+document.getElementById('btn-close-ai')?.addEventListener('click', () => {
+    document.getElementById('ai-panel').classList.add('hidden');
+});
+
+// 保存 API Key
+document.getElementById('btn-save-key')?.addEventListener('click', () => {
+    const apiKey = document.getElementById('input-api-key').value.trim();
+    if (!apiKey) {
+        showToast('请输入 API Key', 'error');
+        return;
+    }
+    
+    localStorage.setItem('gemini_api_key', apiKey);
+    window.FeynmanDiagramGenerator.setAPIKey(apiKey);
+    showToast('✅ API Key 已保存', 'success');
+});
+
+// 生成费曼图
+document.getElementById('btn-generate-diagram')?.addEventListener('click', async () => {
+    const reactionInput = document.getElementById('input-reaction').value.trim();
+    if (!reactionInput) {
+        showToast('请输入反应式', 'error');
+        return;
+    }
+    
+    const apiKey = localStorage.getItem('gemini_api_key');
+    if (!apiKey) {
+        showToast('请先保存 API Key', 'error');
+        return;
+    }
+    
+    // 检查是否生成所有图表
+    const generateAll = document.getElementById('checkbox-generate-all')?.checked || false;
+    
+    // 显示加载状态
+    document.getElementById('ai-loading').classList.remove('hidden');
+    document.getElementById('ai-result').classList.add('hidden');
+    
+    try {
+        // 调用 AI 生成函数
+        const canvasWidth = canvas.width / dpr;
+        const canvasHeight = canvas.height / dpr;
+        
+        const result = await window.FeynmanDiagramGenerator.generateFeynmanDiagram(
+            reactionInput,
+            canvasWidth,
+            canvasHeight,
+            { generateAll }
+        );
+        
+        // 如果生成了多个图表，为每个图表创建一个新画布
+        if (Array.isArray(result)) {
+            console.log(`📊 生成了 ${result.length} 个图表，为每个创建新画布...`);
+            
+            const canvasManager = window.getCanvasManager();
+            if (!canvasManager) {
+                throw new Error('画布管理器未初始化');
+            }
+            
+            // 🔧 暂时禁用自动保存，避免在批量创建时冲突
+            window._disableAutoSave = true;
+            
+            try {
+                // 为每个图表创建画布并加载
+                for (let i = 0; i < result.length; i++) {
+                    const diagramResult = result[i];
+                    const canvasName = `${reactionInput.replace(/\$/g, '')} - ${diagramResult.diagramName}`;
+                    
+                    if (i === 0) {
+                        // 第一个图表：更新当前画布名称和内容
+                        canvasManager.renameCanvas(canvasManager.currentCanvasIndex, canvasName);
+                        canvasManager.updateCurrentCanvas(diagramResult.shapes);
+                    } else {
+                        // 其他图表：创建新画布（shapes 已经在参数中传入）
+                        canvasManager.createNewCanvas(canvasName, diagramResult.shapes);
+                    }
+                }
+                
+                // 加载第一个图表到当前画布并绘制
+                shapes = [...result[0].shapes]; // 深拷贝
+                selectedShapeIds.clear();
+                draw();
+                
+            } finally {
+                // 🔧 恢复自动保存
+                window._disableAutoSave = false;
+            }
+            
+            // 触发 shapes 更新事件
+            window.dispatchEvent(new CustomEvent('shapesUpdated', { detail: { shapes } }));
+            
+            showToast(`✅ 成功生成 ${result.length} 个费曼图，已分别保存到不同画布`, 'success');
+            
+            // 显示结果
+            document.getElementById('ai-loading').classList.add('hidden');
+            document.getElementById('ai-result').classList.remove('hidden');
+            document.getElementById('ai-explanation').innerHTML = `
+                <div class="mb-2">
+                    <span class="font-bold text-cyan-400">相互作用类型：</span>
+                    <span class="text-white">${result[0].interactionType}</span>
+                </div>
+                <div class="mb-2">
+                    <span class="font-bold text-green-400">生成图表数：</span>
+                    <span class="text-white">${result.length} 个</span>
+                    <span class="text-slate-400 text-xs ml-2">(${result.map(r => r.diagramName).join(', ')})</span>
+                </div>
+                <div>
+                    <span class="font-bold text-cyan-400">物理解释：</span>
+                    <div class="text-slate-300 mt-1">${result[0].explanation}</div>
+                </div>
+            `;
+            
+        } else {
+            // 单个图表
+            shapes = [];
+            selectedShapeIds.clear();
+            shapes.push(...result.shapes);
+            draw();
+            
+            // 触发 shapes 更新事件
+            window.dispatchEvent(new CustomEvent('shapesUpdated', { detail: { shapes } }));
+            
+            showToast('✅ AI 生成成功！已自动绘制到画布', 'success');
+            
+            // 显示结果
+            document.getElementById('ai-loading').classList.add('hidden');
+            document.getElementById('ai-result').classList.remove('hidden');
+            document.getElementById('ai-explanation').innerHTML = `
+                <div class="mb-2">
+                    <span class="font-bold text-cyan-400">相互作用类型：</span>
+                    <span class="text-white">${result.interactionType}</span>
+                </div>
+                <div>
+                    <span class="font-bold text-cyan-400">物理解释：</span>
+                    <div class="text-slate-300 mt-1">${result.explanation}</div>
+                </div>
+            `;
+        }
+        
+        // 3秒后关闭面板
+        setTimeout(() => {
+            document.getElementById('ai-panel').classList.add('hidden');
+        }, 3000);
+        
+    } catch (error) {
+        console.error('AI 生成失败:', error);
+        document.getElementById('ai-loading').classList.add('hidden');
+        showToast('❌ 生成失败: ' + error.message, 'error');
+    }
+});
+
+// ESC 键关闭 AI 面板
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        document.getElementById('ai-panel')?.classList.add('hidden');
+    }
+});
+
+// ==================== 画布管理辅助函数 ====================
+
+/**
+ * 加载 shapes 到画布
+ */
+window.loadShapes = function(newShapes) {
+    shapes = JSON.parse(JSON.stringify(newShapes)); // 深拷贝
+    selectedShapeIds.clear();
+    draw();
+    console.log(`✅ 加载了 ${shapes.length} 个形状到画布`);
+};
+
+/**
+ * 清空所有形状
+ */
+window.clearAllShapes = function() {
+    shapes = [];
+    selectedShapeIds.clear();
+    draw();
+    
+    // 触发 shapes 更新事件
+    window.dispatchEvent(new CustomEvent('shapesUpdated', { detail: { shapes } }));
+};
+
+/**
+ * 获取当前 shapes（供 canvas-manager 保存）
+ */
+window.getCurrentShapes = function() {
+    return shapes;
 };
