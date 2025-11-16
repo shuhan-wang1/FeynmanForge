@@ -243,42 +243,107 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
         return p.symbol;
     }).join(' + ');
     
-    const prompt = `You are an expert in particle physics and Feynman diagrams. Generate a COMPLETE and PHYSICALLY ACCURATE Feynman diagram.
+    const prompt = `You are an expert in particle physics and Feynman diagrams. Generate ALL LOWEST-ORDER (tree-level) Feynman diagrams for the given reaction.
 
 **Reaction:** ${initialParticles} → ${finalParticles}
+
+**CRITICAL RULES:**
+1. **ONLY generate LOWEST-ORDER (tree-level) diagrams** - NO loop diagrams, NO radiative corrections
+2. **For flow diagrams: Minimize additional gluon exchanges** - Since we draw the lowest-degree Feynman diagrams, avoid drawing extra gluons to keep diagrams simple. However, strong interactions are still valid - this is about diagram simplicity, not physics constraints.
+3. **Generate ALL possible tree-level channels:**
+   - For e⁻e⁺ → μ⁻μ⁺: Generate s-channel with virtual photon (γ*) AND Z⁰ (two separate diagrams)
+   - For e⁻e⁺ → e⁻e⁺ (Bhabha): Generate s-channel AND t-channel (two separate diagrams)
+   - For quark weak decays: Generate the tree-level W± exchange diagram ONLY
+   - For FCNC processes: If tree-level is FORBIDDEN, generate penguin loop diagram (as the lowest physical order)
+4. **Put each diagram in the "diagrams" array** - Each channel is a separate diagram object
+
+**DIAGRAM TYPE SELECTION:**
+- **DEFAULT: Tree-level diagrams ONLY** (e⁻e⁺→μ⁻μ⁺, quark weak decay, etc.)
+- **EXCEPTION: For FCNC processes ONLY** (b→s transitions with γ/Z, forbidden at tree level): Use penguin loop diagram as the "lowest physical order"
+- **For simplicity in lowest-order diagrams: Avoid additional gluon radiative corrections** - Focus on the dominant process, but strong interactions are still physically valid
+
+**EXAMPLES OF LOWEST-ORDER DIAGRAMS:**
+- e⁻ + e⁺ → μ⁻ + μ⁺: Two tree-level diagrams (s-channel via γ*, s-channel via Z⁰)
+- e⁻ + e⁺ → e⁻ + e⁺: Two tree-level diagrams (s-channel via γ*, t-channel via γ)
+- u → d + W⁺ (quark weak decay): One tree-level diagram (gluon corrections omitted for simplicity)
+- b → s + γ (FCNC): One loop diagram (penguin with top quark loop) - exception because tree-level is forbidden
 
 **CRITICAL REQUIREMENTS:**
 1. ALL initial state particles MUST start from x=80 (left boundary)
 2. ALL final state particles MUST end at x=${canvasWidth - 80} (right boundary)
 3. Create intermediate vertices in the middle region (x around ${canvasWidth / 2})
-4. EVERY line must connect two vertices - no dangling lines
-5. Use the LOWEST ORDER (tree-level) diagram only
+4. **Virtual particle lines MUST have visible length (at least 100px separation between vertices)**
+5. EVERY line must connect two vertices - no dangling lines
+6. For loop diagrams, define the loop structure explicitly
 
 **Canvas dimensions:** ${canvasWidth} × ${canvasHeight}
 
-**Physical Rules:**
+**Physical Rules (Tree-Level Only):**
 - Photons (γ) only couple to charged particles
-- Gluons (g) only couple to quarks and carry color charge
-- W± bosons can change quark flavor (u↔d, c↔s, t↔b)
+- **For lowest-order diagrams: Minimize additional gluon exchanges for simplicity** - Gluons are valid for strong interactions, but we focus on the simplest lowest-degree diagrams
+- W± bosons can change quark flavor (u↔d, c↔s, t↔b) at tree level
+- Z⁰ bosons couple to all fermions but do NOT change flavor
 - Conserve charge, lepton number, baryon number at each vertex
-- For e⁻e⁺→μ⁻μ⁺: use s-channel with virtual photon
-- For quark processes: ALWAYS assign color charge to quarks
-- Spectator quarks maintain their color through the diagram
+- **FCNC processes (b→s, s→d with γ/Z) require loop diagrams** - Tree level is forbidden by SM
 - Virtual particles connect internal vertices only
 
-**Output EXACTLY this JSON structure (for e⁻e⁺→μ⁻μ⁺):**
+**LOOP DIAGRAM STRUCTURE (for penguin diagrams):**
+\`\`\`json
+{
+  "valid": true,
+  "interaction_type": "weak_loop",
+  "diagrams": [
+    {
+      "name": "penguin-diagram",
+      "vertices": [
+        {"id": "v1", "position": {"x": 80, "y": 300}, "type": "external"},
+        {"id": "v2", "position": {"x": 300, "y": 300}, "type": "internal"},
+        {"id": "v3", "position": {"x": 450, "y": 200}, "type": "loop"},
+        {"id": "v4", "position": {"x": 600, "y": 300}, "type": "loop"},
+        {"id": "v5", "position": {"x": 450, "y": 400}, "type": "loop"},
+        {"id": "v6", "position": {"x": 800, "y": 300}, "type": "internal"},
+        {"id": "v7", "position": {"x": 1000, "y": 200}, "type": "external"},
+        {"id": "v8", "position": {"x": 1000, "y": 400}, "type": "external"}
+      ],
+      "lines": [
+        {"from": "v1", "to": "v2", "particle": {"id": "b", "category": "fermion", "isAnti": true, "color": "anti-red"}},
+        {"from": "v2", "to": "v3", "particle": {"id": "w_minus", "category": "boson", "isVirtual": true}},
+        {"from": "v3", "to": "v4", "particle": {"id": "t", "category": "fermion", "isVirtual": true}},
+        {"from": "v4", "to": "v5", "particle": {"id": "w_plus", "category": "boson", "isVirtual": true}},
+        {"from": "v5", "to": "v2", "particle": {"id": "t", "category": "fermion", "isVirtual": true, "isAnti": true}},
+        {"from": "v4", "to": "v6", "particle": {"id": "photon", "category": "boson", "isVirtual": true}},
+        {"from": "v2", "to": "v6", "particle": {"id": "s", "category": "fermion", "isAnti": true, "color": "anti-red"}},
+        {"from": "v6", "to": "v7", "particle": {"id": "mu", "category": "fermion", "isAnti": false}},
+        {"from": "v6", "to": "v8", "particle": {"id": "mu", "category": "fermion", "isAnti": true}}
+      ],
+      "loops": [
+        {
+          "id": "loop1",
+          "type": "fermion_loop",
+          "vertices": ["v3", "v4", "v5"],
+          "particles": ["t", "w_plus", "t_bar"],
+          "description": "Top quark loop with W bosons"
+        }
+      ]
+    }
+  ],
+  "explanation": "Penguin diagram: b→s transition via top quark loop, then photon radiates to μ⁺μ⁻"
+}
+\`\`\`
+
+**TREE-LEVEL DIAGRAM STRUCTURE (for simple processes):**
 \`\`\`json
 {
   "valid": true,
   "interaction_type": "electromagnetic",
   "diagrams": [
     {
-      "name": "s-channel",
+      "name": "s-channel-photon",
       "vertices": [
         {"id": "v1", "position": {"x": 80, "y": ${canvasHeight / 2 - 100}}},
         {"id": "v2", "position": {"x": 80, "y": ${canvasHeight / 2 + 100}}},
-        {"id": "v3", "position": {"x": ${canvasWidth / 2 - 50}, "y": ${canvasHeight / 2}}},
-        {"id": "v4", "position": {"x": ${canvasWidth / 2 + 50}, "y": ${canvasHeight / 2}}},
+        {"id": "v3", "position": {"x": ${canvasWidth / 2 - 100}, "y": ${canvasHeight / 2}}},
+        {"id": "v4", "position": {"x": ${canvasWidth / 2 + 100}, "y": ${canvasHeight / 2}}},
         {"id": "v5", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 - 100}}},
         {"id": "v6", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 + 100}}}
       ],
@@ -289,43 +354,48 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
         {"from": "v4", "to": "v5", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
         {"from": "v4", "to": "v6", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
       ]
+    },
+    {
+      "name": "s-channel-z-boson",
+      "vertices": [
+        {"id": "v1", "position": {"x": 80, "y": ${canvasHeight / 2 - 100}}},
+        {"id": "v2", "position": {"x": 80, "y": ${canvasHeight / 2 + 100}}},
+        {"id": "v3", "position": {"x": ${canvasWidth / 2 - 100}, "y": ${canvasHeight / 2}}},
+        {"id": "v4", "position": {"x": ${canvasWidth / 2 + 100}, "y": ${canvasHeight / 2}}},
+        {"id": "v5", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 - 100}}},
+        {"id": "v6", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 + 100}}}
+      ],
+      "lines": [
+        {"from": "v1", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": false}},
+        {"from": "v2", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": true}},
+        {"from": "v3", "to": "v4", "particle": {"id": "z", "category": "boson", "isVirtual": true}},
+        {"from": "v4", "to": "v5", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
+        {"from": "v4", "to": "v6", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
+      ]
     }
   ],
-  "explanation": "s-channel: e⁻e⁺ annihilate via virtual photon γ*, producing μ⁻μ⁺ pair"
+  "explanation": "s-channel diagrams: e⁻e⁺ can annihilate via virtual photon γ* or Z⁰ boson, producing μ⁻μ⁺ pair"
 }
 \`\`\`
 
-**CRITICAL:** 
-- The diagram MUST include the virtual photon line between two vertices (v3 to v4)
+**CRITICAL - Lowest Order Diagrams Only:** 
+- **Generate ALL tree-level channels** (e.g., both γ* and Z⁰ for e⁻e⁺→μ⁻μ⁺, both s-channel and t-channel for scattering)
+- **Minimize additional gluon radiative corrections** - For simplicity in lowest-order flow diagrams, avoid extra gluons (though they are physically valid for strong interactions)
+- **NO Higgs exchange** unless explicitly requested (Higgs coupling is very weak)
+- Each channel in separate object in "diagrams" array
+- Virtual particle line MUST have at least 100px horizontal separation (e.g., v3 at x=620, v4 at x=820)
 - Initial particles (e⁻, e⁺) start at x=80
 - Final particles (μ⁻, μ⁺) end at x=${canvasWidth - 80}
-- Virtual photon connects the annihilation vertex to the production vertex
 
-**IMPORTANT:** 
-- Particle IDs: e, mu, tau, nu_e, nu_mu, nu_tau, u, d, c, s, t, b, photon, gluon, w_plus, w_minus, z, higgs
-- For fermions, set "isAnti": true for antiparticles (e⁺, μ⁺, ū, d̄, etc.)
-- **For QUARKS (u, d, c, s, t, b), MUST include "color": "red" or "green" or "blue"**
-- **For ANTIQUARKS (ū, d̄, etc.), MUST include "color": "anti-red" or "anti-green" or "anti-blue"**
-- **For GLUONS, MUST include "gluonColor": 0-5 representing color combinations:**
-  - 0: red-antigreen (rḡ)
-  - 1: red-antiblue (rb̄)
-  - 2: green-antired (gr̄)
-  - 3: green-antiblue (gb̄)
-  - 4: blue-antired (br̄)
-  - 5: blue-antigreen (bḡ)
-- **COLOR CONSERVATION at each vertex:** Sum of color charges must be zero (white)
-  - Example: u(red) + ū(anti-red) → photon ✓
-  - Example: u(red) → u(blue) + gluon(red-antiblue) ✓
-- Initial particles are at x=80, final particles at x=${canvasWidth - 80}
-- Example quark line: {"from": "v1", "to": "v2", "particle": {"id": "u", "category": "fermion", "group": "quark_u", "isAnti": false, "color": "red"}}
-- Example gluon line: {"from": "v1", "to": "v2", "particle": {"id": "gluon", "category": "boson", "gluonColor": 0}}
-- Generate the complete JSON now for: ${initialParticles} → ${finalParticles}
-
-**CRITICAL FOR STRONG INTERACTIONS:**
-- Track each quark's color through the diagram
-- Gluons change quark colors while preserving color neutrality
-- If input has specific colors (e.g., u_red, d_blue), preserve them
-- Spectator quarks keep their color unchanged`;
+**IMPORTANT RULES:** 
+- Particle IDs: e, mu, tau, nu_e, nu_mu, nu_tau, u, d, c, s, t, b, photon, w_plus, w_minus, z, higgs, gluon
+- **For lowest-order flow diagrams: Minimize gluon additions** - Gluons are valid for strong interactions, but we focus on simplest diagrams
+- For fermions, set "isAnti": true for antiparticles
+- **For QUARKS, MUST include "color": "red"/"green"/"blue"**
+- **For ANTIQUARKS, MUST include "color": "anti-red"/"anti-green"/"anti-blue"**
+- **For virtual particles in loops, set "isVirtual": true**
+- **FCNC processes (b→s, s→d with Z/γ) use loop diagrams with "loops" array** (exception: tree level forbidden)
+- Generate the complete JSON now for: ${initialParticles} → ${finalParticles}`;
 
     return prompt;
 }
@@ -461,12 +531,45 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
         throw new Error('Gemini 未返回有效的费曼图数据');
     }
     
-    // 只取第一个图（最简单的）
+    console.log(`📊 Gemini 返回了 ${geminiResponse.diagrams.length} 个费曼图`);
+    
+    // 🎨 如果有多个图表,选择第一个(用户可以通过 canvas 切换查看其他图)
+    // TODO: 未来可以添加 UI 让用户选择要显示哪个图
     const diagram = geminiResponse.diagrams[0];
+    
+    if (geminiResponse.diagrams.length > 1) {
+        console.log(`✨ 可选图表: ${geminiResponse.diagrams.map(d => d.name).join(', ')}`);
+        console.log(`📌 当前显示: ${diagram.name}`);
+    }
     
     // 检查图表是否有必要的数据
     if (!diagram.vertices || !diagram.lines) {
         throw new Error('费曼图缺少顶点或线条数据');
+    }
+    
+    // 🔧 检查是否有环路定义
+    const hasLoops = diagram.loops && diagram.loops.length > 0;
+    let loopLineIds = new Set(); // 记录哪些线属于环路
+    
+    if (hasLoops) {
+        console.log(`🔄 检测到 ${diagram.loops.length} 个环路，标记环路线条`);
+        
+        // 收集所有环路涉及的边
+        diagram.loops.forEach(loop => {
+            if (!loop.vertices || loop.vertices.length < 2) return;
+            
+            // 找出哪些 lines 连接了环路中的顶点
+            diagram.lines.forEach((line, idx) => {
+                const fromInLoop = loop.vertices.includes(line.from);
+                const toInLoop = loop.vertices.includes(line.to);
+                
+                // 如果这条线的两个端点都在环路顶点列表中,标记它
+                if (fromInLoop && toInLoop) {
+                    loopLineIds.add(idx);
+                    console.log(`  线条 ${idx} (${line.from}→${line.to}, ${line.particle.id}) 属于环路 ${loop.id}`);
+                }
+            });
+        });
     }
     
     // 构建顶点映射
@@ -474,7 +577,8 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
     diagram.vertices.forEach(v => {
         vertexMap[v.id] = {
             x: v.position.x,
-            y: v.position.y
+            y: v.position.y,
+            type: v.type || 'normal'  // 标记顶点类型：external, internal, loop
         };
     });
     
@@ -495,8 +599,36 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
             particleId: particle.id
         };
         
+        // 🔧 标记是否属于环路
+        const isPartOfLoop = loopLineIds.has(idx);
+        if (isPartOfLoop) {
+            props.isLoopLine = true;
+            console.log(`  ✨ 线条 ${idx} 被标记为环路线`);
+        }
+        
         // ✅ 添加所有 Gemini 提供的属性（保持原始数据）
-        if (particle.group) props.group = particle.group;
+        if (particle.group === 'lepton' || particle.group === 'quark_u' || particle.group === 'quark_d') {
+            // 标准格式：直接使用
+            props.group = particle.group;
+        } else if (particle.group === 'quark' || particle.category === 'fermion') {
+            // 🔧 兼容旧格式：如果 group='quark' 或没有 group，自动推断
+            const leptons = ['e', 'mu', 'tau', 'nu_e', 'nu_mu', 'nu_tau'];
+            const quarks_u = ['u', 'c', 't'];
+            const quarks_d = ['d', 's', 'b'];
+            
+            if (leptons.includes(particle.id)) {
+                props.group = 'lepton';
+            } else if (quarks_u.includes(particle.id)) {
+                props.group = 'quark_u';
+                console.log(`  🔧 自动将 ${particle.id} 的 group 从 '${particle.group || 'undefined'}' 修正为 'quark_u'`);
+            } else if (quarks_d.includes(particle.id)) {
+                props.group = 'quark_d';
+                console.log(`  🔧 自动将 ${particle.id} 的 group 从 '${particle.group || 'undefined'}' 修正为 'quark_d'`);
+            } else {
+                console.warn(`未知的费米子 ${particle.id}，默认为轻子`);
+                props.group = 'lepton';
+            }
+        }
         if (particle.isAnti !== undefined) props.isAnti = particle.isAnti;
         if (particle.isVirtual !== undefined) props.isVirtual = particle.isVirtual;
         if (particle.color) {
@@ -528,7 +660,7 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
         }
         
         // 确定线条类型
-        let type;
+        let type = 'photon'; // 默认类型
         if (particle.category === 'fermion') {
             type = 'fermion';
         } else if (particle.id === 'photon') {
@@ -543,6 +675,8 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
             type = 'higgs';
         }
         
+        console.log(`  线条 ${idx}: ${particle.id} -> type=${type}, props.particleId=${props.particleId}`);
+        
         shapes.push({
             id: Date.now() + idx * 10,  // 增加 ID 间隔避免冲突
             type: type,
@@ -552,10 +686,61 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
         });
     });
     
+    // 🔧 环路已经通过 isLoopLine 标记在普通线条中了,不需要创建独立的 loop 形状
+    // 环路线条会在渲染时自动显示为虚线或特殊样式
+    
+    // 🔧 处理传播子 (propagators): 用于 s-channel 等内部传播子
+    if (diagram.propagators && diagram.propagators.length > 0) {
+        console.log(`✨ 检测到 ${diagram.propagators.length} 个传播子`);
+        
+        diagram.propagators.forEach((prop, propIdx) => {
+            const vertex = vertexMap[prop.from];
+            if (!vertex) {
+                console.warn(`传播子缺少顶点 ${prop.from}`);
+                return;
+            }
+            
+            const particle = prop.particle;
+            const props = {
+                category: particle.category,
+                particleId: particle.id,
+                isVirtual: true
+            };
+            
+            if (particle.group) props.group = particle.group;
+            if (particle.gluonColor !== undefined) props.gluonColor = particle.gluonColor;
+            
+            // 确定类型
+            let type;
+            if (particle.id === 'photon') type = 'photon';
+            else if (particle.id === 'z') type = 'boson_z';
+            else if (particle.id === 'w_plus' || particle.id === 'w_minus') type = 'boson_w';
+            else if (particle.id === 'gluon') type = 'gluon';
+            else if (particle.id === 'higgs') type = 'higgs';
+            else if (particle.category === 'fermion') type = 'fermion';
+            else type = 'photon';
+            
+            console.log(`  ✅ 传播子 ${propIdx + 1}: ${particle.id} (类型: ${type}) 在顶点 ${prop.from} 位置 (${vertex.x}, ${vertex.y})`);
+            
+            // 🎨 创建一个特殊的"传播子标记"形状
+            shapes.push({
+                id: Date.now() + 2000 + propIdx * 10,
+                type: 'propagator',  // 新类型：传播子标记
+                propagatorType: type,
+                position: { x: vertex.x, y: vertex.y },
+                props: {
+                    ...props,
+                    isPropagator: true
+                }
+            });
+        });
+    }
+    
     return {
         shapes,
         explanation: geminiResponse.explanation,
-        interactionType: geminiResponse.interaction_type
+        interactionType: geminiResponse.interaction_type,
+        hasLoops: hasLoops
     };
 }
 

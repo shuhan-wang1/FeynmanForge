@@ -54,6 +54,21 @@ const i18n = {
         'generate-button': '🎨 生成费曼图',
         'ai-loading-text': 'AI 正在思考中...',
         'ai-success': '生成成功！',
+        // 画布管理
+        'canvas-manager': '画布管理',
+        'export-all': '导出全部',
+        'import': '导入',
+        'switch-canvas': '切换到此画布',
+        'rename-canvas': '重命名',
+        'duplicate-canvas': '复制',
+        'delete-canvas': '删除',
+        'rename-canvas-prompt': '请输入新名称:',
+        'canvas-renamed': '✅ 已重命名为: {name}',
+        'canvas-duplicated': '✅ 已复制画布: {name}',
+        'canvas-deleted': '✅ 已删除: {name}',
+        'confirm-delete-canvas': '确定要删除画布"{name}"吗？',
+        'generate-all-diagrams': '生成所有最低阶费曼图',
+        'channel-examples': '(如 s-channel γ*, Z⁰，忽略胶子)',
         'help-content': `
             <div class="bg-cyan-900/30 p-2 rounded border border-cyan-700">
                 <div class="font-bold text-cyan-300 mb-1 text-xs">🔴 严格守恒定律</div>
@@ -147,6 +162,33 @@ const i18n = {
         'selected-multi': '{count} particles selected',
         'empty-select': 'Select a particle or a tool',
         'boson-w-direction': 'L→R = W⁻, R→L = W⁺',
+        // AI 相关
+        'ai-generate': 'AI Generate',
+        'ai-title': '🤖 AI Auto-generate Feynman Diagram',
+        'api-key-notice': 'Gemini API Key required for first use',
+        'api-key-instruction': 'Get it for free from Google AI Studio',
+        'api-key-label': 'Gemini API Key',
+        'save-key': 'Save',
+        'reaction-label': 'Input Reaction',
+        'reaction-examples': 'Examples:',
+        'generate-button': '🎨 Generate Diagram',
+        'ai-loading-text': 'AI is thinking...',
+        'ai-success': 'Generated successfully!',
+        // Canvas Manager
+        'canvas-manager': 'Canvas Manager',
+        'export-all': 'Export All',
+        'import': 'Import',
+        'switch-canvas': 'Switch to this canvas',
+        'rename-canvas': 'Rename',
+        'duplicate-canvas': 'Duplicate',
+        'delete-canvas': 'Delete',
+        'rename-canvas-prompt': 'Enter new name:',
+        'canvas-renamed': '✅ Renamed to: {name}',
+        'canvas-duplicated': '✅ Canvas duplicated: {name}',
+        'canvas-deleted': '✅ Deleted: {name}',
+        'confirm-delete-canvas': 'Delete canvas "{name}"?',
+        'generate-all-diagrams': 'Generate all lowest-order diagrams',
+        'channel-examples': '(e.g., s-channel γ*, Z⁰, no gluons)',
         'help-content': `
             <div class="bg-cyan-900/30 p-2 rounded border border-cyan-700">
                 <div class="font-bold text-cyan-300 mb-1 text-xs">🔴 Strict Conservation</div>
@@ -476,12 +518,183 @@ function saveToCanvasManager() {
     }, 500); // 500ms 后保存
 }
 
+// 🎨 绘制传播子标记(用于 s-channel 虚粒子)
+function drawPropagatorMarker(propagatorShape, isSelected) {
+    const pos = propagatorShape.position;
+    if (!pos) {
+        console.warn('传播子缺少位置信息');
+        return;
+    }
+    
+    // 确定颜色
+    let color = '#94a3b8';
+    if (propagatorShape.propagatorType === 'photon') color = '#facc15';
+    if (propagatorShape.propagatorType === 'boson_w') color = '#fb923c';
+    if (propagatorShape.propagatorType === 'boson_z') color = '#60a5fa';
+    if (propagatorShape.propagatorType === 'gluon') color = '#ec4899';
+    if (propagatorShape.propagatorType === 'higgs') color = '#a855f7';
+    if (isSelected) color = '#22d3ee';
+    
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.lineCap = 'round';
+    
+    // 🎨 绘制一条长的虚粒子线段(从顶点向上/下延伸)
+    const lineLength = 200; // 线段长度 (5倍原长度)
+    const p1 = { x: pos.x, y: pos.y - lineLength / 2 };
+    const p2 = { x: pos.x, y: pos.y + lineLength / 2 };
+    
+    ctx.save();
+    ctx.translate(p1.x, p1.y);
+    
+    // 根据粒子类型绘制不同样式
+    if (propagatorShape.propagatorType === 'photon') {
+        // 光子: 波浪线
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        const freq = 0.3;
+        const amp = 4;
+        for(let i = 0; i <= lineLength; i += 2) {
+            ctx.lineTo(Math.sin(i * freq) * amp, i);
+        }
+        ctx.stroke();
+    } else if (propagatorShape.propagatorType === 'boson_z' || propagatorShape.propagatorType === 'boson_w') {
+        // W/Z玻色子: 波浪线(频率稍低)
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        const freq = 0.25;
+        const amp = 4;
+        for(let i = 0; i <= lineLength; i += 2) {
+            ctx.lineTo(Math.sin(i * freq) * amp, i);
+        }
+        ctx.stroke();
+    } else if (propagatorShape.propagatorType === 'gluon') {
+        // 胶子: 螺旋线
+        ctx.beginPath();
+        const r = 4;
+        for(let i = 0; i <= lineLength; i++) {
+            const t = i * 0.4;
+            const cx = Math.cos(t + Math.PI) * r * 0.8;
+            const cy = i;
+            if(i === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+        }
+        ctx.stroke();
+    } else if (propagatorShape.propagatorType === 'higgs') {
+        // 希格斯: 虚线
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, lineLength);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    } else {
+        // 默认: 直线
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(0, lineLength);
+        ctx.stroke();
+    }
+    
+    ctx.restore();
+    
+    // 🏷️ 绘制粒子符号
+    const label = getParticleSymbol(propagatorShape.props) + '*'; // 虚粒子加星号
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px JetBrains Mono';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, pos.x + 15, pos.y);
+    
+    // 🎯 如果被选中,绘制选中框
+    if (isSelected) {
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(p1.x - 8, p1.y - 4, 16, lineLength + 8);
+    }
+}
+
+// 🎨 绘制环路图(用于企鹅图、盒图等量子环路)
+function drawLoopDiagram(loopShape, isSelected) {
+    const vertices = loopShape.vertices || [];
+    if (vertices.length < 3) {
+        console.warn('环路顶点不足，无法绘制');
+        return;
+    }
+    
+    // 确定颜色
+    let color = '#ec4899'; // 默认使用类似胶子的粉色
+    if (loopShape.loopType === 'fermion_loop') color = '#34d399'; // 费米子环路用绿色
+    if (loopShape.loopType === 'boson_loop') color = '#fb923c';   // 玻色子环路用橙色
+    if (loopShape.loopType === 'fermion_boson_loop') color = '#a855f7'; // 混合环路用紫色
+    if (loopShape.loopType === 'quark_boson_loop') color = '#a855f7';
+    if (isSelected) color = '#22d3ee';
+    
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = isSelected ? 3 : 2;
+    
+    // 🔄 绘制闭合的贝塞尔曲线连接所有顶点
+    ctx.beginPath();
+    
+    // 第一个点
+    ctx.moveTo(vertices[0].x, vertices[0].y);
+    
+    // 使用二次贝塞尔曲线平滑连接
+    for (let i = 0; i < vertices.length; i++) {
+        const current = vertices[i];
+        const next = vertices[(i + 1) % vertices.length];
+        
+        // 计算控制点(在当前点和下一个点之间,稍微向外偏移形成曲线)
+        const controlX = (current.x + next.x) / 2 + (next.y - current.y) * 0.15;
+        const controlY = (current.y + next.y) / 2 - (next.x - current.x) * 0.15;
+        
+        ctx.quadraticCurveTo(controlX, controlY, next.x, next.y);
+    }
+    
+    ctx.closePath();
+    ctx.stroke();
+    
+    // 🏷️ 只在选中时显示简短的 "Loop" 标签
+    if (isSelected && loopShape.loopType) {
+        // 计算环路中心
+        const centerX = vertices.reduce((sum, v) => sum + v.x, 0) / vertices.length;
+        const centerY = vertices.reduce((sum, v) => sum + v.y, 0) / vertices.length;
+        
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px JetBrains Mono';
+        ctx.textAlign = 'center';
+        ctx.fillText('Loop', centerX, centerY);
+    }
+    
+    // 🎯 如果被选中,绘制顶点标记
+    if (isSelected) {
+        ctx.strokeStyle = '#22d3ee';
+        ctx.lineWidth = 1;
+        vertices.forEach(v => {
+            ctx.strokeRect(v.x - 4, v.y - 4, 8, 8);
+        });
+    }
+}
+
 function drawShape(s) {
     const isSelected = selectedShapeIds.has(s.id);
+    
+    // 🔧 处理传播子标记类型
+    if (s.type === 'propagator') {
+        drawPropagatorMarker(s, isSelected);
+        return;
+    }
     
     ctx.lineWidth = isSelected ? 3 : 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    
+    // 🔧 如果是环路线条,使用虚线样式
+    const isLoopLine = s.props && s.props.isLoopLine;
+    if (isLoopLine && s.type !== 'higgs') {
+        ctx.setLineDash([6, 3]);  // 虚线模式
+        ctx.lineWidth = isSelected ? 2.5 : 1.5;  // 稍细一些
+    }
     
     let color = '#94a3b8';
     if (s.type === 'fermion') color = s.props.isAnti ? '#f87171' : '#34d399';
@@ -544,9 +757,30 @@ function drawShape(s) {
     }
 
     ctx.restore();
+    
+    // 🔧 恢复 lineDash(如果是环路线条设置了虚线)
+    if (isLoopLine && s.type !== 'higgs') {
+        ctx.setLineDash([]);
+    }
 
-    let label = getParticleSymbol(s.props);
-    if (s.props.isAnti && s.type === 'fermion') label = convertToAntiSymbol(label);
+    // 🎨 获取粒子标签 - 针对不同类型使用不同策略
+    let label;
+    if (s.type === 'photon') {
+        label = 'γ';
+    } else if (s.type === 'boson_w') {
+        label = s.props.particleId === 'w_plus' ? 'W⁺' : 'W⁻';
+    } else if (s.type === 'boson_z') {
+        label = 'Z⁰';
+    } else if (s.type === 'gluon') {
+        label = 'g';
+    } else if (s.type === 'higgs') {
+        label = 'H';
+        console.log('🔍 Higgs 检测: type=', s.type, 'particleId=', s.props.particleId, 'label=', label);
+    } else {
+        // 费米子使用通用方法
+        label = getParticleSymbol(s.props);
+        if (s.props.isAnti && s.type === 'fermion') label = convertToAntiSymbol(label);
+    }
     
     if (s.props.color && (s.type === 'fermion')) {
         const colorLabels = {
@@ -602,13 +836,25 @@ function checkSnap(pos) {
     
     // 检查现有粒子的端点
     for(let s of shapes) {
-        if (Math.hypot(s.p1.x - pos.x, s.p1.y - pos.y) < threshold) return s.p1;
-        if (Math.hypot(s.p2.x - pos.x, s.p2.y - pos.y) < threshold) return s.p2;
+        // 跳过 propagator 类型(使用 position 而不是 p1/p2)
+        if (s.type === 'propagator') {
+            if (s.position && Math.hypot(s.position.x - pos.x, s.position.y - pos.y) < threshold) {
+                return s.position;
+            }
+            continue;
+        }
+        
+        // 检查普通形状的端点
+        if (s.p1 && Math.hypot(s.p1.x - pos.x, s.p1.y - pos.y) < threshold) return s.p1;
+        if (s.p2 && Math.hypot(s.p2.x - pos.x, s.p2.y - pos.y) < threshold) return s.p2;
     }
     
     // ⭐ 新增：检查是否靠近线段中间（用于辐射修正）
     // 计算鼠标位置到每条线段的最近点
     for(let s of shapes) {
+        // 跳过没有端点的形状(只有 propagator)
+        if (s.type === 'propagator' || !s.p1 || !s.p2) continue;
+        
         const A = pos.x - s.p1.x;
         const B = pos.y - s.p1.y;
         const C = s.p2.x - s.p1.x;
@@ -644,6 +890,22 @@ canvas.addEventListener('pointerdown', e => {
         let hit = null;
         for (let i = shapes.length - 1; i >= 0; i--) {
             const s = shapes[i];
+            
+            // 处理 propagator 类型
+            if (s.type === 'propagator') {
+                if (s.position) {
+                    const dist = Math.hypot(pos.x - s.position.x, pos.y - s.position.y);
+                    if (dist < 20) { // propagator 点击范围稍大
+                        hit = s;
+                        break;
+                    }
+                }
+                continue;
+            }
+            
+            // 检查普通形状是否有端点
+            if (!s.p1 || !s.p2) continue;
+            
             const A = pos.x - s.p1.x; const B = pos.y - s.p1.y;
             const C = s.p2.x - s.p1.x; const D = s.p2.y - s.p1.y;
             const dot = A*C + B*D;
@@ -759,6 +1021,9 @@ function validatePhysics() {
     // ⭐ 新增：检查点是否在某条线段上（用于检测中间顶点）
     function findPointOnLine(p) {
         for(let s of shapes) {
+            // 跳过 propagator 类型和没有端点的形状
+            if (s.type === 'propagator' || !s.p1 || !s.p2) continue;
+            
             // 跳过以该点为端点的线（已经通过getVertex处理）
             if (Math.hypot(s.p1.x - p.x, s.p1.y - p.y) < SNAP_DIST) continue;
             if (Math.hypot(s.p2.x - p.x, s.p2.y - p.y) < SNAP_DIST) continue;
@@ -790,6 +1055,9 @@ function validatePhysics() {
     }
 
     shapes.forEach(s => {
+        // 跳过 propagator 类型(它们不参与守恒律验证)
+        if (s.type === 'propagator' || !s.p1 || !s.p2) return;
+        
         const v1 = getVertex(s.p1);
         const v2 = getVertex(s.p2);
 

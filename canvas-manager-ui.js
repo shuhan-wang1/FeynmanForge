@@ -120,16 +120,16 @@
                         </div>
                     </div>
                     <div class="flex items-center gap-1 ml-2">
-                        ${!canvas.isCurrent ? `<button onclick="window.switchCanvas(${index})" class="p-1 text-slate-400 hover:text-cyan-400 transition-colors" title="切换到此画布">
+                        ${!canvas.isCurrent ? `<button onclick="window.switchCanvas(${index})" class="p-1 text-slate-400 hover:text-cyan-400 transition-colors" title="${t('switch-canvas')}">
                             <i data-lucide="arrow-right" class="w-3 h-3"></i>
                         </button>` : ''}
-                        <button onclick="window.renameCanvas(${index})" class="p-1 text-slate-400 hover:text-yellow-400 transition-colors" title="重命名">
+                        <button onclick="window.renameCanvas(${index})" class="p-1 text-slate-400 hover:text-yellow-400 transition-colors" title="${t('rename-canvas')}">
                             <i data-lucide="edit" class="w-3 h-3"></i>
                         </button>
-                        <button onclick="window.duplicateCanvas(${index})" class="p-1 text-slate-400 hover:text-green-400 transition-colors" title="复制">
+                        <button onclick="window.duplicateCanvas(${index})" class="p-1 text-slate-400 hover:text-green-400 transition-colors" title="${t('duplicate-canvas')}">
                             <i data-lucide="copy" class="w-3 h-3"></i>
                         </button>
-                        <button onclick="window.deleteCanvas(${index})" class="p-1 text-slate-400 hover:text-red-400 transition-colors" title="删除">
+                        <button onclick="window.deleteCanvas(${index})" class="p-1 text-slate-400 hover:text-red-400 transition-colors" title="${t('delete-canvas')}">
                             <i data-lucide="trash-2" class="w-3 h-3"></i>
                         </button>
                     </div>
@@ -161,10 +161,10 @@
     // 重命名画布
     window.renameCanvas = function(index) {
         const canvas = canvasManager.canvases[index];
-        const newName = prompt('请输入新名称:', canvas.name);
+        const newName = prompt(t('rename-canvas-prompt'), canvas.name);
         if (newName && newName !== canvas.name) {
             canvasManager.renameCanvas(index, newName);
-            showToast(`✅ 已重命名为: ${newName}`);
+            showToast(t('canvas-renamed', {name: newName}));
         }
     };
     
@@ -176,7 +176,7 @@
             if (window.loadShapes) {
                 window.loadShapes(newCanvas.shapes);
             }
-            showToast(`✅ 已复制画布: ${newCanvas.name}`);
+            showToast(t('canvas-duplicated', {name: newCanvas.name}));
             hideCanvasMenu();
         }
     };
@@ -184,7 +184,7 @@
     // 删除画布
     window.deleteCanvas = function(index) {
         const canvas = canvasManager.canvases[index];
-        if (confirm(`确定要删除画布"${canvas.name}"吗？`)) {
+        if (confirm(t('confirm-delete-canvas', {name: canvas.name}))) {
             if (canvasManager.deleteCanvas(index)) {
                 // 如果删除的是当前画布，加载新的当前画布
                 if (index === canvasManager.currentCanvasIndex || canvasManager.currentCanvasIndex < 0) {
@@ -193,7 +193,7 @@
                         window.loadShapes(currentCanvas.shapes);
                     }
                 }
-                showToast(`✅ 已删除: ${canvas.name}`);
+                showToast(t('canvas-deleted', {name: canvas.name}));
             }
         }
     };

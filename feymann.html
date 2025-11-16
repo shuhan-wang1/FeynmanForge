@@ -137,7 +137,7 @@
         <div class="p-3 border-b border-slate-700 flex items-center justify-between">
             <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
                 <i data-lucide="layers" class="w-4 h-4"></i>
-                <span>画布管理</span>
+                <span data-i18n="canvas-manager">画布管理</span>
             </h3>
             <button id="btn-close-canvas-menu" class="text-slate-400 hover:text-white">
                 <i data-lucide="x" class="w-4 h-4"></i>
@@ -149,11 +149,11 @@
         <div class="p-2 border-t border-slate-700 flex gap-2">
             <button id="btn-export-canvases" class="flex-1 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-xs transition-all flex items-center justify-center gap-1">
                 <i data-lucide="download" class="w-3 h-3"></i>
-                <span>导出全部</span>
+                <span data-i18n="export-all">导出全部</span>
             </button>
             <button id="btn-import-canvases" class="flex-1 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded text-xs transition-all flex items-center justify-center gap-1">
                 <i data-lucide="upload" class="w-3 h-3"></i>
-                <span>导入</span>
+                <span data-i18n="import">导入</span>
             </button>
         </div>
     </div>
@@ -352,10 +352,10 @@
             <!-- 生成选项 -->
             <div class="flex items-center gap-4 p-3 bg-slate-800 rounded border border-slate-700">
                 <label class="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" id="checkbox-generate-all" class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-cyan-600 focus:ring-cyan-500">
-                    <span class="text-sm text-slate-300">生成所有可能的费曼图</span>
+                    <input type="checkbox" id="checkbox-generate-all" checked class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-cyan-600 focus:ring-cyan-500">
+                    <span class="text-sm text-slate-300" data-i18n="generate-all-diagrams">生成所有最低阶费曼图</span>
                 </label>
-                <div class="text-xs text-slate-500">(如 t-channel, u-channel, s-channel)</div>
+                <div class="text-xs text-slate-500" data-i18n="channel-examples">(如 s-channel γ*, Z⁰，忽略胶子)</div>
             </div>
             
             <!-- 生成按钮 -->
@@ -383,9 +383,9 @@
         </div>
     </div>
 
-    <script src="canvas-manager.js"></script>
-    <script src="canvas-manager-ui.js"></script>
-    <script src="gemini-integration.js"></script>
-    <script src="feynman-logic.js"></script>
+    <script src="canvas-manager.js?v=20250116"></script>
+    <script src="canvas-manager-ui.js?v=20250116"></script>
+    <script src="gemini-integration.js?v=20250116"></script>
+    <script src="feynman-logic.js?v=20250116"></script>
 </body>
 </html>
