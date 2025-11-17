@@ -68,7 +68,9 @@ const i18n = {
         'canvas-deleted': '✅ 已删除: {name}',
         'confirm-delete-canvas': '确定要删除画布"{name}"吗？',
         'generate-all-diagrams': '生成所有最低阶费曼图',
-        'channel-examples': '(如 s-channel γ*, Z⁰，忽略胶子)',
+        'interaction-type-label': '相互作用类型：',
+        'diagram-count-label': '生成图表数：',
+        'physical-explanation-label': '物理解释：',
         'help-content': `
             <div class="bg-cyan-900/30 p-2 rounded border border-cyan-700">
                 <div class="font-bold text-cyan-300 mb-1 text-xs">🔴 严格守恒定律</div>
@@ -188,7 +190,9 @@ const i18n = {
         'canvas-deleted': '✅ Deleted: {name}',
         'confirm-delete-canvas': 'Delete canvas "{name}"?',
         'generate-all-diagrams': 'Generate all lowest-order diagrams',
-        'channel-examples': '(e.g., s-channel γ*, Z⁰, no gluons)',
+        'interaction-type-label': 'Interaction Type:',
+        'diagram-count-label': 'Diagrams Generated:',
+        'physical-explanation-label': 'Physical Explanation:',
         'help-content': `
             <div class="bg-cyan-900/30 p-2 rounded border border-cyan-700">
                 <div class="font-bold text-cyan-300 mb-1 text-xs">🔴 Strict Conservation</div>
@@ -613,8 +617,140 @@ function drawPropagatorMarker(propagatorShape, isSelected) {
     }
 }
 
-// 🎨 绘制环路图(用于企鹅图、盒图等量子环路)
+// 🎨 绘制企鹅图 (半圆形)
+function drawPenguinDiagram(loopShape, isSelected) {
+    const vertices = loopShape.vertices || [];
+    if (vertices.length !== 3) {
+        console.warn('企鹅图需要3个顶点 (直径起点, 直径终点, 圆弧中点)', vertices);
+        return;
+    }
+
+    const p1 = vertices[0]; // 直径起点（左）
+    const p2 = vertices[1]; // 直径终点（右）
+    // ⚠️ Gemini 返回的 p_arc 位置可能在下方，我们需要重新计算让圆弧向上
+    
+    // 🔧 重新计算圆弧顶点：在直径中点的上方
+    const diameter = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const radius = diameter / 2;
+    const p_arc = {
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2 - radius * 0.85  // 向上偏移，形成半圆
+    };
+
+    // 确定颜色
+    let quarkColor = '#34d399'; // 费米子绿色
+    let wBosonColor = '#fb923c';   // W玻色子橙色
+    if (isSelected) {
+        quarkColor = '#22d3ee';
+        wBosonColor = '#22d3ee';
+    }
+
+    // 1. 绘制直径 (过渡反夸克) - 水平直线
+    ctx.beginPath();
+    ctx.strokeStyle = quarkColor;
+    ctx.lineWidth = isSelected ? 3 : 2;
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
+    ctx.stroke();
+    
+    // 🔧 在直径中间绘制箭头（反夸克从右向左）
+    const midX = (p1.x + p2.x) / 2;
+    const midY = (p1.y + p2.y) / 2;
+    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    ctx.save();
+    ctx.translate(midX, midY);
+    ctx.rotate(angle + Math.PI); // 旋转180度，使箭头指向左边（反粒子方向）
+    const arrowSize = 8;
+    ctx.fillStyle = quarkColor;
+    ctx.beginPath();
+    ctx.moveTo(arrowSize * 0.5, 0);
+    ctx.lineTo(-arrowSize * 0.5, -arrowSize / 1.6);
+    ctx.lineTo(-arrowSize * 0.5, arrowSize / 1.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    // 2. 绘制内部两条W玻色子线（从p1到p_arc，从p_arc到p2）
+    ctx.strokeStyle = wBosonColor;
+    ctx.lineWidth = isSelected ? 2.5 : 1.8;
+    
+    // 辅助函数：绘制W玻色子波浪线
+    const drawWBosonLine = (px1, py1, px2, py2) => {
+        const dx = px2 - px1;
+        const dy = py2 - py1;
+        const dist = Math.hypot(dx, dy);
+        const lineAngle = Math.atan2(dy, dx);
+        
+        ctx.save();
+        ctx.translate(px1, py1);
+        ctx.rotate(lineAngle);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        const freq = 0.25;
+        const amp = 4;
+        for(let i = 0; i <= dist; i += 2) {
+            ctx.lineTo(i, Math.sin(i * freq) * amp);
+        }
+        ctx.stroke();
+        ctx.restore();
+    };
+    
+    drawWBosonLine(p1.x, p1.y, p_arc.x, p_arc.y);
+    drawWBosonLine(p_arc.x, p_arc.y, p2.x, p2.y);
+
+    // 3. 绘制标签
+    let quarkName = loopShape.particles[0] || 'q';
+    let wBosonName = loopShape.particles[1] || 'W';
+    
+    // 🔧 对于企鹅图中的反夸克，添加 Unicode 组合上划线
+    quarkName = quarkName + '\u0305';  // U+0305 组合上划线，显示为 t̅
+    
+    // 🔧 转换W玻色子名称为显示格式
+    if (wBosonName === 'w_plus') wBosonName = 'W⁺';
+    if (wBosonName === 'w_minus') wBosonName = 'W⁻';
+    
+    ctx.fillStyle = '#fff';
+    ctx.font = '14px Arial, sans-serif';  // 使用支持 Unicode 的字体
+    ctx.textAlign = 'center';
+    
+    // 夸克标签放在直径下方
+    ctx.fillText(quarkName, midX, midY + 18);
+    
+    // W玻色子标签放在两条线的中间位置
+    const wLabel1X = (p1.x + p_arc.x) / 2;
+    const wLabel1Y = (p1.y + p_arc.y) / 2 - 10;
+    const wLabel2X = (p_arc.x + p2.x) / 2;
+    const wLabel2Y = (p_arc.y + p2.y) / 2 - 10;
+    
+    ctx.fillText(wBosonName, wLabel1X, wLabel1Y);
+    ctx.fillText(wBosonName, wLabel2X, wLabel2Y);
+
+    // 4. 如果被选中, 绘制顶点标记（包括虚拟顶点p_arc）
+    if (isSelected) {
+        ctx.strokeStyle = '#22d3ee';
+        ctx.fillStyle = '#22d3ee';
+        ctx.lineWidth = 1;
+        
+        // 标记直径端点
+        ctx.strokeRect(p1.x - 4, p1.y - 4, 8, 8);
+        ctx.strokeRect(p2.x - 4, p2.y - 4, 8, 8);
+        
+        // 特别标记虚拟顶点（圆圈，在圆弧顶部）
+        ctx.beginPath();
+        ctx.arc(p_arc.x, p_arc.y, 6, 0, Math.PI * 2);
+        ctx.stroke();
+    }
+}
+
+// 🎨 绘制环路图(用于盒图等)
 function drawLoopDiagram(loopShape, isSelected) {
+    // ⭐ 如果是企鹅图，使用新的专用函数
+    if (loopShape.loopType === 'penguin_loop') {
+        drawPenguinDiagram(loopShape, isSelected);
+        return;
+    }
+
     const vertices = loopShape.vertices || [];
     if (vertices.length < 3) {
         console.warn('环路顶点不足，无法绘制');
@@ -684,16 +820,20 @@ function drawShape(s) {
         drawPropagatorMarker(s, isSelected);
         return;
     }
+
+    // ⭐ 如果是环路对象，使用专用函数绘制
+    if (s.type === 'loop') {
+        drawLoopDiagram(s, isSelected);
+        return;
+    }
     
     ctx.lineWidth = isSelected ? 3 : 2;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     
-    // 🔧 如果是环路线条,使用虚线样式
-    const isLoopLine = s.props && s.props.isLoopLine;
-    if (isLoopLine && s.type !== 'higgs') {
-        ctx.setLineDash([6, 3]);  // 虚线模式
-        ctx.lineWidth = isSelected ? 2.5 : 1.5;  // 稍细一些
+    // 🔧 如果是希格斯粒子，使用虚线
+    if (s.type === 'higgs') {
+        ctx.setLineDash([4, 4]);
     }
     
     let color = '#94a3b8';
@@ -758,11 +898,6 @@ function drawShape(s) {
 
     ctx.restore();
     
-    // 🔧 恢复 lineDash(如果是环路线条设置了虚线)
-    if (isLoopLine && s.type !== 'higgs') {
-        ctx.setLineDash([]);
-    }
-
     // 🎨 获取粒子标签 - 针对不同类型使用不同策略
     let label;
     if (s.type === 'photon') {
@@ -899,6 +1034,22 @@ canvas.addEventListener('pointerdown', e => {
                         hit = s;
                         break;
                     }
+                }
+                continue;
+            }
+            
+            // 🔧 处理 loop 类型（企鹅图、盒图等）
+            if (s.type === 'loop') {
+                if (s.vertices && s.vertices.length > 0) {
+                    // 检查鼠标是否在 loop 的任何顶点附近
+                    for (const vertex of s.vertices) {
+                        const dist = Math.hypot(pos.x - vertex.x, pos.y - vertex.y);
+                        if (dist < 30) { // loop 点击范围较大
+                            hit = s;
+                            break;
+                        }
+                    }
+                    if (hit) break;
                 }
                 continue;
             }
@@ -1946,16 +2097,16 @@ document.getElementById('btn-generate-diagram')?.addEventListener('click', async
             document.getElementById('ai-result').classList.remove('hidden');
             document.getElementById('ai-explanation').innerHTML = `
                 <div class="mb-2">
-                    <span class="font-bold text-cyan-400">相互作用类型：</span>
+                    <span class="font-bold text-cyan-400">${t('interaction-type-label')}</span>
                     <span class="text-white">${result[0].interactionType}</span>
                 </div>
                 <div class="mb-2">
-                    <span class="font-bold text-green-400">生成图表数：</span>
-                    <span class="text-white">${result.length} 个</span>
+                    <span class="font-bold text-green-400">${t('diagram-count-label')}</span>
+                    <span class="text-white">${result.length} ${currentLang === 'zh' ? '个' : ''}</span>
                     <span class="text-slate-400 text-xs ml-2">(${result.map(r => r.diagramName).join(', ')})</span>
                 </div>
                 <div>
-                    <span class="font-bold text-cyan-400">物理解释：</span>
+                    <span class="font-bold text-cyan-400">${t('physical-explanation-label')}</span>
                     <div class="text-slate-300 mt-1">${result[0].explanation}</div>
                 </div>
             `;
@@ -1977,11 +2128,11 @@ document.getElementById('btn-generate-diagram')?.addEventListener('click', async
             document.getElementById('ai-result').classList.remove('hidden');
             document.getElementById('ai-explanation').innerHTML = `
                 <div class="mb-2">
-                    <span class="font-bold text-cyan-400">相互作用类型：</span>
+                    <span class="font-bold text-cyan-400">${t('interaction-type-label')}</span>
                     <span class="text-white">${result.interactionType}</span>
                 </div>
                 <div>
-                    <span class="font-bold text-cyan-400">物理解释：</span>
+                    <span class="font-bold text-cyan-400">${t('physical-explanation-label')}</span>
                     <div class="text-slate-300 mt-1">${result.explanation}</div>
                 </div>
             `;

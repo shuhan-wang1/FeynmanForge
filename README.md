@@ -32,6 +32,10 @@ The standout feature of Feynman Forge is its ability to automatically generate d
 4. **Choose Generation Mode:** You can check the **"Generate all lowest-order diagrams"** (`生成所有最低阶费曼图`) box to have the AI attempt to find all possible tree-level diagrams (e.g., both s-channel and t-channel). If multiple diagrams are generated, they will be placed in new, automatically-named canvases.
 5. **Generate:** Click the **"Generate Diagram"** (`生成费曼图`) button. The system will show a loading state and then draw the resulting diagram(s) on the canvas.
 
+## NOTE: THERE IS CURRENTLY NO AI CAN DRAW FEYNMAN DIAGRAM PERFECTLY.
+
+**The current model that was been is Gemini-2.5-pro, according to my empirical test, it always have hard time for complicated reactions especially in Strong interaction (as the colour charge conservation is always been violated).**
+
 ### AI Input Format
 
 The AI parser (`gemini-integration.js`) requires a specific format to understand your reaction.
@@ -124,3 +128,15 @@ This is a static, frontend-only application. No server or build-step is required
 1. Ensure all the provided files (`.html`, `.js`) are in the same directory.
 2. Open the `start.html` file in a modern web browser.
 3. Choose one of the two modules to begin.
+
+## Examples:
+
+### beta+ decay (weak interaction for up quark)
+
+![1763325627925](image/README/1763325627925.png)
+
+### Up and anti-up quark annihilation (via strong interaction)
+![1763401984864](image/README/1763401984864.png)
+![1763406960151](image/README/1763406960151.png)
+
+![1763406936482](image/README/1763406936482.png)
