@@ -1143,17 +1143,198 @@ canvas.addEventListener('pointerup', e => {
     draw();
 });
 
+// --- 辅助函数 (Helper Functions) ---
+
+function getParticleData(props) {
+    if (!props) return null;
+    const { category, group, particleId } = props;
+    
+    if (category === 'fermion') {
+        let list = [];
+        if (group === 'lepton') list = PHYSICS.leptons;
+        else if (group === 'quark_u') list = PHYSICS.quarks_u;
+        else if (group === 'quark_d') list = PHYSICS.quarks_d;
+        
+        const p = list.find(x => x.id === particleId);
+        return p ? { ...p } : null;
+    } else if (category === 'boson') {
+        const p = PHYSICS.bosons[particleId];
+        return p ? { ...p } : null;
+    }
+    return null;
+}
+
+function getParticleMass(p) {
+    if (p.mass !== undefined) return p.mass;
+    const id = p.particleId || p.id;
+    return PARTICLE_MASSES[id] || 0;
+}
+
+function getParticleDimensionality(p) {
+    if (p.type === 'fermion' || p.category === 'fermion') return FERMION_DIMENSIONALITY;
+    return BOSON_DIMENSIONALITY;
+}
+
+function hasCharge(p) {
+    return p.charge && Math.abs(p.charge) > 0.01;
+}
+
+function isQuark(p) {
+    return p.group === 'quark_u' || p.group === 'quark_d' || 
+           (p.flavor && ['up','down','charm','strange','top','bottom'].includes(p.flavor));
+}
+
+function getParticleSymbol(props) {
+    const data = getParticleData(props);
+    return data ? data.symbol : '?';
+}
+
+function convertToAntiSymbol(symbol) {
+    if (symbol.endsWith('⁻')) return symbol.replace('⁻', '⁺');
+    if (symbol.endsWith('⁺')) return symbol.replace('⁺', '⁻');
+    if (symbol.includes('nu')) return symbol.replace('ν', 'ν̄');
+    return symbol + '\u0305';
+}
+
+function populateFermionSelect(props) {
+    const sel = ui.selParticle;
+    if (!sel) return;
+    
+    sel.innerHTML = '';
+    let list = [];
+    if (props.group === 'lepton') list = PHYSICS.leptons;
+    else if (props.group === 'quark_u') list = PHYSICS.quarks_u;
+    else if (props.group === 'quark_d') list = PHYSICS.quarks_d;
+    
+    list.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = currentLang === 'zh' ? p.name : p.enName;
+        if (p.id === props.particleId) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+
+function updateUI() {
+    const hasSelection = selectedShapeIds.size > 0;
+    let activeProps = currentProps;
+    let activeTool = currentTool;
+
+    if (hasSelection) {
+        const lastId = Array.from(selectedShapeIds).pop();
+        const shape = shapes.find(s => s.id === lastId);
+        if (shape) {
+            activeProps = shape.props;
+            activeTool = shape.type;
+        }
+    }
+
+    if (ui.empty) ui.empty.classList.add('hidden');
+    if (ui.fermion) ui.fermion.classList.add('hidden');
+    if (ui.boson) ui.boson.classList.add('hidden');
+
+    if (!hasSelection && !isDrawing) {
+         if (currentTool === 'select' && !hasSelection) {
+             if (ui.empty) ui.empty.classList.remove('hidden');
+         } else {
+             if (activeTool === 'fermion') {
+                 if (ui.fermion) ui.fermion.classList.remove('hidden');
+                 populateFermionSelect(activeProps);
+             } else if (['photon', 'gluon', 'boson_w', 'boson_z', 'higgs'].includes(activeTool)) {
+                 if (ui.boson) ui.boson.classList.remove('hidden');
+             }
+         }
+    } else if (hasSelection) {
+         if (activeTool === 'fermion') {
+             if (ui.fermion) ui.fermion.classList.remove('hidden');
+             populateFermionSelect(activeProps);
+         } else {
+             if (ui.boson) ui.boson.classList.remove('hidden');
+         }
+    }
+
+    const data = getParticleData(activeProps);
+    if (data) {
+        if (ui.previewQ) ui.previewQ.textContent = data.charge;
+        if (ui.previewL) ui.previewL.textContent = data.lepton;
+        if (ui.previewB) ui.previewB.textContent = data.baryon.toFixed(2);
+        if (ui.previewSpin) ui.previewSpin.textContent = data.spin;
+        if (ui.previewParity) ui.previewParity.textContent = data.parity;
+    }
+
+    if (ui.colorSelector) {
+        if (activeTool === 'fermion' && (activeProps.group === 'quark_u' || activeProps.group === 'quark_d')) {
+            ui.colorSelector.classList.remove('hidden');
+        } else {
+            ui.colorSelector.classList.add('hidden');
+        }
+    }
+
+    if (ui.gluonColorSelector) {
+        if (activeTool === 'gluon') {
+            ui.gluonColorSelector.classList.remove('hidden');
+        } else {
+            ui.gluonColorSelector.classList.add('hidden');
+        }
+    }
+}
+
 // --- 物理验证系统 ---
 document.getElementById('btn-validate').onclick = validatePhysics;
 
-function validatePhysics() {
-    document.getElementById('error-layer').innerHTML = '';
+function showError(x, y, html) {
+    const div = document.createElement('div');
+    div.className = 'absolute bg-red-500/90 text-white text-xs px-2 py-1 rounded border border-red-300 shadow-xl z-50 text-center pointer-events-none whitespace-nowrap';
+    div.style.left = x + 'px';
+    div.style.top = (y + 15) + 'px';
+    div.style.transform = 'translateX(-50%)';
+    div.innerHTML = `<i data-lucide="alert-circle" class="w-3 h-3 inline mr-1"></i>` + html;
+    document.getElementById('error-layer').appendChild(div);
+    if (typeof lucide !== 'undefined') lucide.createIcons();
     
+    const ring = document.createElement('div');
+    ring.className = 'absolute w-8 h-8 border-2 border-red-500 rounded-full -translate-x-1/2 -translate-y-1/2 snap-ring pointer-events-none';
+    ring.style.left = x + 'px';
+    ring.style.top = y + 'px';
+    document.getElementById('error-layer').appendChild(ring);
+
+    setTimeout(() => {
+        if (div) div.remove();
+        if (ring) ring.remove();
+    }, 3000);
+}
+
+function showWarning(x, y, html) {
+    const div = document.createElement('div');
+    div.className = 'absolute bg-yellow-500/90 text-black text-xs px-2 py-1 rounded border border-yellow-300 shadow-xl z-50 text-center pointer-events-none whitespace-nowrap';
+    div.style.left = x + 'px';
+    div.style.top = (y - 25) + 'px';  // 显示在顶点上方，避免与错误重叠
+    div.style.transform = 'translateX(-50%)';
+    div.innerHTML = `<i data-lucide="alert-triangle" class="w-3 h-3 inline mr-1"></i>` + html;
+    document.getElementById('error-layer').appendChild(div);
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+    
+    const ring = document.createElement('div');
+    ring.className = 'absolute w-8 h-8 border-2 border-yellow-500 rounded-full -translate-x-1/2 -translate-y-1/2 snap-ring pointer-events-none';
+    ring.style.left = x + 'px';
+    ring.style.top = y + 'px';
+    document.getElementById('error-layer').appendChild(ring);
+
+    setTimeout(() => {
+        if (div) div.remove();
+        if (ring) ring.remove();
+    }, 4000);  // 警告显示时间稍长一点
+}
+
+// 纯逻辑验证函数，不操作 DOM
+function validateDiagram(shapesToCheck) {
+    let errors = [];
+    let warnings = [];
     let vertices = [];
     const SNAP_DIST = 15;
     const w = canvas.width / dpr;
     const finalStateX = w - FINAL_STATE_X_OFFSET;
-
+    
     // 辅助函数：判断点是否在初态或末态边界上（外线）
     function isOnBoundary(x) {
         return Math.abs(x - INITIAL_STATE_X) < SNAP_DIST || 
@@ -1169,9 +1350,9 @@ function validatePhysics() {
         return v;
     }
     
-    // ⭐ 新增：检查点是否在某条线段上（用于检测中间顶点）
+    // 检查点是否在某条线段上
     function findPointOnLine(p) {
-        for(let s of shapes) {
+        for(let s of shapesToCheck) {
             // 跳过 propagator 类型和没有端点的形状
             if (s.type === 'propagator' || !s.p1 || !s.p2) continue;
             
@@ -1205,7 +1386,8 @@ function validatePhysics() {
         return null;
     }
 
-    shapes.forEach(s => {
+    // 构建顶点图
+    shapesToCheck.forEach(s => {
         // 跳过 propagator 类型(它们不参与守恒律验证)
         if (s.type === 'propagator' || !s.p1 || !s.p2) return;
         
@@ -1216,13 +1398,8 @@ function validatePhysics() {
         if (!particleData) return;
 
         let flowFromV1ToV2 = true;
-        if (s.type === 'fermion' && s.props.isAnti) {
-            flowFromV1ToV2 = false;
-        }
-        // ⭐ 修复：W⁺玻色子的电荷流向与箭头相反
-        if (s.type === 'boson_w' && s.props.particleId === 'w_plus') {
-            flowFromV1ToV2 = false;
-        }
+        if (s.type === 'fermion' && s.props.isAnti) flowFromV1ToV2 = false;
+        if (s.type === 'boson_w' && s.props.particleId === 'w_plus') flowFromV1ToV2 = false;
 
         let extendedData = {
             ...particleData,
@@ -1249,10 +1426,11 @@ function validatePhysics() {
         }
     });
     
-    // ⭐ 处理线段中间的顶点（辐射修正）
-    // 检查每条线的端点是否落在其他线段上
-    shapes.forEach(line => {
-        // 检查这条线的两个端点
+    // 处理线段中间的顶点
+    shapesToCheck.forEach(line => {
+        // 跳过没有端点的形状 (如 propagator, loop)
+        if (!line.p1 || !line.p2) return;
+
         [line.p1, line.p2].forEach(endpoint => {
             const onLineResult = findPointOnLine(endpoint);
             if (onLineResult) {
@@ -1268,13 +1446,8 @@ function validatePhysics() {
                 if (!baseParticleData) return;
                 
                 let baseFlowFromV1ToV2 = true;
-                if (baseLine.type === 'fermion' && baseLine.props.isAnti) {
-                    baseFlowFromV1ToV2 = false;
-                }
-                // ⭐ 修复：W⁺玻色子的电荷流向与箭头相反
-                if (baseLine.type === 'boson_w' && baseLine.props.particleId === 'w_plus') {
-                    baseFlowFromV1ToV2 = false;
-                }
+                if (baseLine.type === 'fermion' && baseLine.props.isAnti) baseFlowFromV1ToV2 = false;
+                if (baseLine.type === 'boson_w' && baseLine.props.particleId === 'w_plus') baseFlowFromV1ToV2 = false;
                 
                 let baseExtendedData = {
                     ...baseParticleData,
@@ -1282,7 +1455,7 @@ function validatePhysics() {
                     color: baseLine.props.color || null,
                     gluonColor: baseLine.props.gluonColor !== undefined ? baseLine.props.gluonColor : null,
                     isAnti: baseLine.props.isAnti || false,
-                    shapeId: baseLine.id,
+                                       shapeId: baseLine.id,
                     type: baseLine.type
                 };
                 
@@ -1292,8 +1465,6 @@ function validatePhysics() {
                     baseExtendedData.baryon = -baseParticleData.baryon;
                 }
                 
-                // 基线流经这个交点
-                // 将基线视为 incoming 到交点，然后 outgoing 从交点
                 if (baseFlowFromV1ToV2) {
                     intersectionVertex.incoming.push(baseExtendedData);
                     intersectionVertex.outgoing.push(baseExtendedData);
@@ -1307,8 +1478,6 @@ function validatePhysics() {
 
     let allValid = true;
     let vertexCount = 0;
-    let errorCount = 0;
-    let warnings = [];
 
     vertices.forEach(v => {
         const totalLines = v.incoming.length + v.outgoing.length;
@@ -1527,7 +1696,6 @@ function validatePhysics() {
             for (let color in colorBalance) {
                 if (Math.abs(colorBalance[color]) > 0.01) {
                     colorViolation = true;
-                    console.log(`❌ 色荷不守恒 at 顶点(${v.x.toFixed(0)},${v.y.toFixed(0)}):`, colorBalance);
                     break;
                 }
             }
@@ -1575,345 +1743,67 @@ function validatePhysics() {
         
         if (conservationViolated) {
             allValid = false;
-            errorCount++;
-            showError(v.x, v.y, msg.join('<br>'));
-        }
-    });
-    
-    // ⭐ 显示所有警告（黄色）
-    vertices.forEach(v => {
-        const vertexWarnings = warnings.filter(w => 
-            w.includes(`顶点(${v.x.toFixed(0)},${v.y.toFixed(0)})`)
-        );
-        if (vertexWarnings.length > 0) {
-            const warningMsg = vertexWarnings.map(w => 
-                w.replace(`顶点(${v.x.toFixed(0)},${v.y.toFixed(0)}): `, '')
-            ).join('<br>');
-            showWarning(v.x, v.y, warningMsg);
+            errors.push(`顶点(${v.x.toFixed(0)},${v.y.toFixed(0)}): ${msg.join(', ')}`);
         }
     });
 
-    if (vertexCount === 0 && shapes.length > 0) { 
+    return { isValid: allValid, errors, warnings, vertexCount };
+}
+
+// 暴露给全局
+window.validateDiagram = validateDiagram;
+
+function validatePhysics() {
+    document.getElementById('error-layer').innerHTML = '';
+    
+    const result = validateDiagram(shapes);
+    
+    // 显示错误
+    result.errors.forEach(err => {
+        // 解析坐标
+        const match = err.match(/顶点\((\d+),(\d+)\): (.+)/);
+        if (match) {
+            const x = parseInt(match[1]);
+            const y = parseInt(match[2]);
+            const msg = match[3].replace(/, /g, '<br>');
+            showError(x, y, msg);
+        }
+    });
+    
+    // 显示警告
+    result.warnings.forEach(warn => {
+        const match = warn.match(/顶点\((\d+),(\d+)\): (.+)/);
+        if (match) {
+            const x = parseInt(match[1]);
+            const y = parseInt(match[2]);
+            const msg = match[3];
+            showWarning(x, y, msg);
+        }
+    });
+
+    if (result.vertexCount === 0 && shapes.length > 0) { 
         showToast(t('toast-no-vertex'), "info"); 
     }
-    else if (vertexCount > 0 && allValid) {
-        let msg = t('toast-validate-pass', {count: vertexCount});
-        if (warnings.length > 0) { 
-            msg += `\n` + t('toast-validate-warn', {count: warnings.length}); 
+    else if (result.vertexCount > 0 && result.isValid) {
+        let msg = t('toast-validate-pass', {count: result.vertexCount});
+        if (result.warnings.length > 0) { 
+            msg += `\n` + t('toast-validate-warn', {count: result.warnings.length}); 
             console.log('=== 物理规则警告 ==='); 
-            warnings.forEach(w => console.log('⚠️', w)); 
+            result.warnings.forEach(w => console.log('⚠️', w)); 
         }
-        showToast(msg, warnings.length > 0 ? "warning" : "success");
-    } else if (!allValid) { 
-        showToast(t('toast-validate-error', {count: errorCount}), "error"); 
+        showToast(msg, result.warnings.length > 0 ? "warning" : "success");
+    } else if (!result.isValid) { 
+        showToast(t('toast-validate-error', {count: result.errors.length}), "error"); 
     }
     else { 
         showToast(t('toast-empty'), "info"); 
     }
     
-    if (warnings.length > 0) { 
+    if (result.warnings.length > 0) { 
         console.log('=== 物理规则警告 ==='); 
-        warnings.forEach(w => console.log('⚠️', w)); 
+        result.warnings.forEach(w => console.log('⚠️', w)); 
     }
 }
-
-function showError(x, y, html) {
-    const div = document.createElement('div');
-    div.className = 'absolute bg-red-500/90 text-white text-xs px-2 py-1 rounded border border-red-300 shadow-xl z-50 text-center pointer-events-none whitespace-nowrap';
-    div.style.left = x + 'px';
-    div.style.top = (y + 15) + 'px';
-    div.style.transform = 'translateX(-50%)';
-    div.innerHTML = `<i data-lucide="alert-circle" class="w-3 h-3 inline mr-1"></i>` + html;
-    document.getElementById('error-layer').appendChild(div);
-    if (typeof lucide !== 'undefined') lucide.createIcons();
-    
-    const ring = document.createElement('div');
-    ring.className = 'absolute w-8 h-8 border-2 border-red-500 rounded-full -translate-x-1/2 -translate-y-1/2 snap-ring pointer-events-none';
-    ring.style.left = x + 'px';
-    ring.style.top = y + 'px';
-    document.getElementById('error-layer').appendChild(ring);
-
-    setTimeout(() => {
-        if (div) div.remove();
-        if (ring) ring.remove();
-    }, 3000);
-}
-
-function showWarning(x, y, html) {
-    const div = document.createElement('div');
-    div.className = 'absolute bg-yellow-500/90 text-black text-xs px-2 py-1 rounded border border-yellow-300 shadow-xl z-50 text-center pointer-events-none whitespace-nowrap';
-    div.style.left = x + 'px';
-    div.style.top = (y - 25) + 'px';  // 显示在顶点上方，避免与错误重叠
-    div.style.transform = 'translateX(-50%)';
-    div.innerHTML = `<i data-lucide="alert-triangle" class="w-3 h-3 inline mr-1"></i>` + html;
-    document.getElementById('error-layer').appendChild(div);
-    if (typeof lucide !== 'undefined') lucide.createIcons();
-    
-    const ring = document.createElement('div');
-    ring.className = 'absolute w-8 h-8 border-2 border-yellow-500 rounded-full -translate-x-1/2 -translate-y-1/2 snap-ring pointer-events-none';
-    ring.style.left = x + 'px';
-    ring.style.top = y + 'px';
-    document.getElementById('error-layer').appendChild(ring);
-
-    setTimeout(() => {
-        if (div) div.remove();
-        if (ring) ring.remove();
-    }, 4000);  // 警告显示时间稍长一点
-}
-
-// --- 辅助函数 ---
-function getParticleData(props) {
-    if (!props) return null;
-    if (props.category === 'fermion') {
-        let list = [];
-        if(props.group === 'lepton') list = PHYSICS.leptons;
-        else if(props.group === 'quark_u') list = PHYSICS.quarks_u;
-        else if(props.group === 'quark_d') list = PHYSICS.quarks_d;
-        return list.find(p => p.id === props.particleId);
-    } else {
-        return PHYSICS.bosons[props.particleId];
-    }
-}
-
-function getParticleMass(props) {
-    if (!props) return 0;
-    
-    // 获取基础粒子ID
-    let particleId = props.particleId;
-    
-    // 处理W玻色子方向
-    if (props.category === 'boson') {
-        if (particleId === 'w_plus' || particleId === 'w_minus') {
-            return PARTICLE_MASSES['w_plus']; // W+和W-质量相同
-        }
-        if (particleId === 'z') return PARTICLE_MASSES['z'];
-        if (particleId === 'higgs') return PARTICLE_MASSES['higgs'];
-        if (particleId === 'photon') return PARTICLE_MASSES['photon'];
-        if (particleId === 'gluon') return PARTICLE_MASSES['gluon'];
-    }
-    
-    // 费米子
-    return PARTICLE_MASSES[particleId] || 0;
-}
-
-function getParticleDimensionality(props) {
-    if (!props) return 0;
-    
-    // 玻色子维度为1.0，费米子维度为1.5
-    if (props.category === 'boson') {
-        return BOSON_DIMENSIONALITY;
-    } else {
-        return FERMION_DIMENSIONALITY;
-    }
-}
-
-function hasCharge(props) {
-    const p = getParticleData(props);
-    if (!p) return false;
-    return Math.abs(p.charge) > 0.01;
-}
-
-function isQuark(props) {
-    if (!props || props.category !== 'fermion') return false;
-    return props.group === 'quark_u' || props.group === 'quark_d';
-}
-
-function getVertexInteractionStrength(v) {
-    // 计算顶点的相互作用强度
-    let hasPhoton = v.incoming.some(p => p.type === 'photon') || v.outgoing.some(p => p.type === 'photon');
-    let hasGluon = v.incoming.some(p => p.type === 'gluon') || v.outgoing.some(p => p.type === 'gluon');
-    let hasWeakBoson = v.incoming.some(p => p.type === 'boson_w' || p.type === 'boson_z') || 
-                       v.outgoing.some(p => p.type === 'boson_w' || p.type === 'boson_z');
-    
-    if (hasGluon) {
-        return { strength: ALPHA_S, force: 'strong', label: 'αₛ ≈ 0.12' };
-    }
-    if (hasPhoton) {
-        // 电磁相互作用强度与电荷成正比
-        let charge = 0;
-        [...v.incoming, ...v.outgoing].forEach(p => {
-            const pd = getParticleData(p);
-            if (pd) charge += Math.abs(pd.charge);
-        });
-        return { strength: ALPHA_EM * charge, force: 'EM', label: `αₑₘ ≈ ${(ALPHA_EM * charge).toExponential(2)}` };
-    }
-    if (hasWeakBoson) {
-        return { strength: ALPHA_W, force: 'weak', label: 'αw ≈ 0.03' };
-    }
-    
-    return { strength: 1.0, force: 'unknown', label: '' };
-}
-
-function getParticleSymbol(props) {
-    const p = getParticleData(props);
-    return p ? p.symbol : '?';
-}
-
-function convertToAntiSymbol(symbol) {
-    if (symbol.includes('⁻')) return symbol.replace('⁻', '⁺');
-    if (symbol.includes('⁺')) return symbol.replace('⁺', '⁻');
-    if (symbol.includes('ν')) return symbol.replace('ν', 'ν\u0304');
-    const quarks = ['u', 'd', 'c', 's', 't', 'b'];
-    if (quarks.includes(symbol)) return symbol + '\u0304';
-    return 'anti-' + symbol;
-}
-
-// --- UI逻辑 ---
-function updateUI() {
-    ui.empty.style.display = 'none';
-    ui.fermion.style.display = 'none';
-    ui.boson.style.display = 'none';
-
-    if (currentTool === 'select') {
-        if (selectedShapeIds.size === 1) {
-            const s = shapes.find(x => selectedShapeIds.has(x.id));
-            if (s) {
-                showSettingsForType(s.type, s.props);
-            }
-        } else if (selectedShapeIds.size > 1) {
-            ui.empty.style.display = 'flex';
-            ui.empty.innerHTML = t('selected-multi', {count: selectedShapeIds.size});
-        } else {
-            ui.empty.style.display = 'flex';
-            ui.empty.innerHTML = t('empty-select');
-        }
-    } else {
-        showSettingsForType(currentTool, currentProps);
-    }
-}
-
-function showSettingsForType(type, props) {
-    if (type === 'fermion') {
-        ui.fermion.style.display = 'grid';
-        populateFermionSelect(props);
-        updatePhysicsPreview(props);
-    } else if (['boson_w', 'boson_z', 'photon', 'gluon', 'higgs'].includes(type)) { 
-        ui.boson.style.display = 'block';
-        populateBosonSelect(type, props);
-    }
-}
-
-document.querySelectorAll('.tool-btn').forEach(btn => {
-    btn.onclick = () => {
-        document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        currentTool = btn.dataset.tool;
-        
-        if (currentTool === 'fermion') currentProps = { category: 'fermion', group: 'lepton', particleId: 'e', color: null };
-        if (currentTool === 'boson_w') currentProps = { category: 'boson', particleId: 'w_minus' };
-        if (currentTool === 'boson_z') currentProps = { category: 'boson', particleId: 'z' };
-        if (currentTool === 'photon') currentProps = { category: 'boson', particleId: 'photon' };
-        if (currentTool === 'gluon') currentProps = { category: 'boson', particleId: 'gluon', gluonColor: 0 };
-        if (currentTool === 'higgs') currentProps = { category: 'boson', particleId: 'higgs' };
-        
-        selectedShapeIds.clear();
-        updateUI();
-    };
-});
-
-document.querySelectorAll('.fam-btn').forEach(btn => {
-    btn.onclick = () => {
-        document.querySelectorAll('.fam-btn').forEach(b => b.classList.remove('active', 'bg-cyan-900', 'text-cyan-300', 'border-cyan-500'));
-        btn.classList.add('active', 'bg-cyan-900', 'text-cyan-300', 'border-cyan-500');
-        currentProps.group = btn.dataset.fam;
-        if(currentProps.group === 'lepton') currentProps.particleId = 'e';
-        if(currentProps.group === 'quark_u') currentProps.particleId = 'u';
-        if(currentProps.group === 'quark_d') currentProps.particleId = 'd';
-        populateFermionSelect(currentProps);
-        syncChanges();
-    }
-});
-
-ui.selParticle.onchange = (e) => { currentProps.particleId = e.target.value; syncChanges(); };
-ui.selColor.onchange = (e) => { currentProps.color = e.target.value; syncChanges(); };
-ui.selGluonColor.onchange = (e) => { currentProps.gluonColor = parseInt(e.target.value); syncChanges(); };
-
-function populateFermionSelect(props) {
-    if (!props) return;
-    let list = [];
-    const group = props.group || 'lepton';
-    if(group === 'lepton') list = PHYSICS.leptons;
-    else if(group === 'quark_u') list = PHYSICS.quarks_u;
-    else if(group === 'quark_d') list = PHYSICS.quarks_d;
-    
-    ui.selParticle.innerHTML = list.map(p => {
-        const name = currentLang === 'zh' ? p.name : p.enName;
-        return `<option value="${p.id}" ${p.id===props.particleId?'selected':''}>${name}</option>`;
-    }).join('');
-    
-    document.querySelectorAll('.fam-btn').forEach(btn => {
-        btn.classList.toggle('active', btn.dataset.fam === group);
-    });
-    
-    if (group === 'quark_u' || group === 'quark_d') {
-        ui.colorSelector.classList.remove('hidden');
-        if (!props.color) { currentProps.color = 'red'; ui.selColor.value = 'red'; }
-    } else {
-        ui.colorSelector.classList.add('hidden');
-        currentProps.color = null;
-    }
-}
-
-function populateBosonSelect(toolType, props) {
-    if (!props) return;
-    const container = document.getElementById('boson-type-container');
-    
-    if (toolType === 'boson_w') {
-        container.innerHTML = `<div class="text-slate-300 text-sm"><span class="font-mono text-orange-400">W±</span><div class="text-xs text-slate-500 mt-1">${t('boson-w-direction')}</div></div>`;
-        ui.gluonColorSelector.classList.add('hidden');
-    } else if (toolType === 'gluon') {
-        container.innerHTML = `<span class="text-slate-500 text-sm font-mono">${t('tool-gluon')} (g)</span>`;
-        ui.gluonColorSelector.classList.remove('hidden');
-        ui.selGluonColor.innerHTML = GLUON_COLORS.map((gc, idx) => `<option value="${idx}" ${idx===(props.gluonColor||0)?'selected':''}>${gc.display}</option>`).join('');
-        if (props.gluonColor === null || props.gluonColor === undefined) { currentProps.gluonColor = 0; }
-    } else {
-        container.innerHTML = `<span class="text-slate-500 text-sm font-mono">${getParticleSymbol(props)}</span>`;
-        ui.gluonColorSelector.classList.add('hidden');
-    }
-}
-
-function syncChanges() {
-    if (selectedShapeIds.size > 0) {
-        shapes.forEach(s => {
-            if (selectedShapeIds.has(s.id)) {
-                if (s.type === 'fermion') {
-                    s.props.group = currentProps.group;
-                    s.props.particleId = currentProps.particleId;
-                    s.props.color = currentProps.color;
-                }
-                if (s.type === 'gluon') {
-                    s.props.gluonColor = currentProps.gluonColor;
-                }
-            }
-        });
-        draw();
-        if (selectedShapeIds.size === 1) { updateUI(); }
-    } else {
-        updatePhysicsPreview(currentProps);
-    }
-}
-
-function updatePhysicsPreview(props) {
-    const p = getParticleData(props);
-    if (!p) {
-        ['Q', 'L', 'B', 'Spin', 'Parity'].forEach(id => ui[`preview${id}`].textContent = '-');
-        return;
-    }
-    
-    const isAnti = props ? props.isAnti || false : false;
-    let q = p.charge, l = p.lepton, b = p.baryon, spin = p.spin || 0, parity = p.parity || 1;
-
-    if (props && props.category === 'fermion' && isAnti) {
-        q = -q; l = -l; b = -b; parity = -parity;
-    }
-    
-    ui.previewQ.textContent = q.toFixed(2);
-    ui.previewL.textContent = l.toFixed(2);
-    ui.previewB.textContent = b.toFixed(2);
-    ui.previewSpin.textContent = spin;
-    ui.previewParity.textContent = parity > 0 ? '+1' : '-1';
-}
-
 document.getElementById('btn-clear').onclick = () => {
     if (selectedShapeIds.size > 0) {
         shapes = shapes.filter(s => !selectedShapeIds.has(s.id));

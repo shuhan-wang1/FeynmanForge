@@ -247,6 +247,30 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
 
 **Reaction:** ${initialParticles} → ${finalParticles}
 
+**DIMENSION 1: CHAIN OF THOUGHT (PHYSICS ANALYSIS)**
+Before generating the JSON, you MUST analyze the reaction step-by-step in a "physics_analysis" field:
+1.  Identify the interaction type (EM, Weak, Strong).
+2.  Check conservation laws (Charge, Lepton number, Baryon number, Color charge).
+3.  Determine the topology (s-channel, t-channel, u-channel, or decay).
+4.  List the vertices and the particles entering/leaving each vertex.
+5.  **For QCD:** Explicitly trace the color flow (e.g., "Red quark emits Red-AntiBlue gluon, becoming Blue quark").
+
+**DIMENSION 2: NORMALIZED COORDINATES**
+-   **Use NORMALIZED COORDINATES (0.0 to 1.0) for all positions.**
+-   x=0.0 is the left edge, x=1.0 is the right edge.
+-   y=0.0 is the top edge, y=1.0 is the bottom edge.
+-   Initial particles start at x=0.1.
+-   Final particles end at x=0.9.
+-   Interaction vertices should be around x=0.5.
+
+**DIMENSION 3: QCD COLOR RULES**
+-   **Color Conservation:** The net color entering a vertex MUST equal the net color leaving it.
+-   **Gluons:** Must carry a color and an anti-color (e.g., "red-antiblue").
+-   **Quarks:** Must have a single color (red, green, blue).
+-   **Anti-Quarks:** Must have a single anti-color (anti-red, anti-green, anti-blue).
+-   **Example:** u(red) -> d(blue) + W+(virtual) is INVALID. Flavor change is Weak, but Color change requires Gluon.
+-   **Correct QCD Vertex:** u(red) -> u(blue) + g(red-antiblue).
+
 **CRITICAL RULES:**
 1.  **ONLY generate LOWEST-ORDER (tree-level) diagrams** - NO loop diagrams, NO radiative corrections
 2.  **For flow diagrams: Minimize additional gluon exchanges** - Since we draw the lowest-degree Feynman diagrams, avoid drawing extra gluons to keep diagrams simple. However, strong interactions are still valid - this is about diagram simplicity, not physics constraints.
@@ -269,14 +293,12 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
 -   b → s + γ (FCNC): One loop diagram (penguin with W boson loop, quarks on horizontal line) - exception because tree-level is forbidden
 
 **CRITICAL REQUIREMENTS:**
-1.  ALL initial state particles MUST start from x=80 (left boundary)
-2.  ALL final state particles MUST end at x=${canvasWidth - 80} (right boundary)
-3.  Create intermediate vertices in the middle region (x around ${canvasWidth / 2})
-4.  **Virtual particle lines MUST have visible length (at least 100px separation between vertices)**
+1.  ALL initial state particles MUST start from x=0.1 (left boundary)
+2.  ALL final state particles MUST end at x=0.9 (right boundary)
+3.  Create intermediate vertices in the middle region (x around 0.5)
+4.  **Virtual particle lines MUST have visible length (at least 0.15 separation in x or y)**
 5.  EVERY line must connect two vertices - no dangling lines
 6.  For loop diagrams, define the loop structure explicitly
-
-**Canvas dimensions:** ${canvasWidth} × ${canvasHeight}
 
 **Physical Rules (Tree-Level Only):**
 -   Photons (γ) only couple to charged particles
@@ -303,19 +325,20 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
 **CORRECT PENGUIN JSON EXAMPLE:**
 \\\`\\\`\\\`json
 {
+  "physics_analysis": "b quark decays into s quark via loop. b emits W-, becoming t. W- and t recombine to s. Photon emitted from W-.",
   "valid": true,
   "interaction_type": "weak_loop",
   "diagrams": [
     {
       "name": "penguin-diagram",
       "vertices": [
-        {"id": "v1", "position": {"x": 80, "y": 300}},
-        {"id": "v2", "position": {"x": 300, "y": 300}},
-        {"id": "v3", "position": {"x": 700, "y": 300}},
-        {"id": "v4", "position": {"x": 500, "y": 150}},
-        {"id": "v6", "position": {"x": 900, "y": 300}},
-        {"id": "v7", "position": {"x": 1100, "y": 200}},
-        {"id": "v8", "position": {"x": 1100, "y": 400}}
+        {"id": "v1", "position": {"x": 0.1, "y": 0.5}},
+        {"id": "v2", "position": {"x": 0.3, "y": 0.5}},
+        {"id": "v3", "position": {"x": 0.7, "y": 0.5}},
+        {"id": "v4", "position": {"x": 0.5, "y": 0.25}},
+        {"id": "v6", "position": {"x": 0.9, "y": 0.5}},
+        {"id": "v7", "position": {"x": 0.9, "y": 0.3}},
+        {"id": "v8", "position": {"x": 0.9, "y": 0.7}}
       ],
       "lines": [
         {"from": "v1", "to": "v2", "particle": {"id": "b", "category": "fermion", "group": "quark_d", "color": "red"}},
@@ -342,41 +365,24 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
 **TREE-LEVEL DIAGRAM STRUCTURE (for simple processes):**
 \\\`\\\`\\\`json
 {
+  "physics_analysis": "e- and e+ annihilate into a virtual photon, which then decays into mu- and mu+.",
   "valid": true,
   "interaction_type": "electromagnetic",
   "diagrams": [
     {
       "name": "s-channel-photon",
       "vertices": [
-        {"id": "v1", "position": {"x": 80, "y": ${canvasHeight / 2 - 100}}},
-        {"id": "v2", "position": {"x": 80, "y": ${canvasHeight / 2 + 100}}},
-        {"id": "v3", "position": {"x": ${canvasWidth / 2 - 100}, "y": ${canvasHeight / 2}}},
-        {"id": "v4", "position": {"x": ${canvasWidth / 2 + 100}, "y": ${canvasHeight / 2}}},
-        {"id": "v5", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 - 100}}},
-        {"id": "v6", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 + 100}}}
+        {"id": "v1", "position": {"x": 0.1, "y": 0.3}},
+        {"id": "v2", "position": {"x": 0.1, "y": 0.7}},
+        {"id": "v3", "position": {"x": 0.5, "y": 0.5}},
+        {"id": "v4", "position": {"x": 0.7, "y": 0.5}},
+        {"id": "v5", "position": {"x": 0.9, "y": 0.3}},
+        {"id": "v6", "position": {"x": 0.9, "y": 0.7}}
       ],
       "lines": [
         {"from": "v1", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": false}},
         {"from": "v2", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": true}},
         {"from": "v3", "to": "v4", "particle": {"id": "photon", "category": "boson", "isVirtual": true}},
-        {"from": "v4", "to": "v5", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
-        {"from": "v4", "to": "v6", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
-      ]
-    },
-    {
-      "name": "s-channel-z-boson",
-      "vertices": [
-        {"id": "v1", "position": {"x": 80, "y": ${canvasHeight / 2 - 100}}},
-        {"id": "v2", "position": {"x": 80, "y": ${canvasHeight / 2 + 100}}},
-        {"id": "v3", "position": {"x": ${canvasWidth / 2 - 100}, "y": ${canvasHeight / 2}}},
-        {"id": "v4", "position": {"x": ${canvasWidth / 2 + 100}, "y": ${canvasHeight / 2}}},
-        {"id": "v5", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 - 100}}},
-        {"id": "v6", "position": {"x": ${canvasWidth - 80}, "y": ${canvasHeight / 2 + 100}}}
-      ],
-      "lines": [
-        {"from": "v1", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": false}},
-        {"from": "v2", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": true}},
-        {"from": "v3", "to": "v4", "particle": {"id": "z", "category": "boson", "isVirtual": true}},
         {"from": "v4", "to": "v5", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
         {"from": "v4", "to": "v6", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
       ]
@@ -391,9 +397,9 @@ function buildGeminiPrompt(reaction, canvasWidth, canvasHeight) {
 -   **Minimize additional gluon radiative corrections** - For simplicity in lowest-order flow diagrams, avoid extra gluons (though they are physically valid for strong interactions)
 -   **NO Higgs exchange** unless explicitly requested (Higgs coupling is very weak)
 -   Each channel in separate object in "diagrams" array
--   Virtual particle line MUST have at least 100px horizontal separation (e.g., v3 at x=620, v4 at x=820)
--   Initial particles (e⁻, e⁺) start at x=80
--   Final particles (μ⁻, μ⁺) end at x=${canvasWidth - 80}
+-   Virtual particle line MUST have at least 0.15 normalized separation
+-   Initial particles (e⁻, e⁺) start at x=0.1
+-   Final particles (μ⁻, μ⁺) end at x=0.9
 
 **IMPORTANT RULES:** 
 -   Particle IDs: e, mu, tau, nu_e, nu_mu, nu_tau, u, d, c, s, t, b, photon, w_plus, w_minus, z, higgs, gluon
@@ -566,9 +572,17 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
     // 构建顶点映射
     const vertexMap = {};
     diagram.vertices.forEach(v => {
+        // 支持归一化坐标 (0.0-1.0) 或 绝对坐标
+        let x = v.position.x;
+        let y = v.position.y;
+        
+        // 如果坐标在 0-1 之间，认为是归一化坐标
+        if (x <= 1.0 && x >= 0.0) x = x * canvasWidth;
+        if (y <= 1.0 && y >= 0.0) y = y * canvasHeight;
+
         vertexMap[v.id] = {
-            x: v.position.x,
-            y: v.position.y,
+            x: x,
+            y: y,
             type: v.type || 'normal'  // 标记顶点类型：external, internal, loop
         };
     });
@@ -807,50 +821,95 @@ async function generateFeynmanDiagram(reactionInput, canvasWidth = 800, canvasHe
         const reaction = parseReaction(reactionInput);
         console.log('✅ 解析成功:', reaction);
         
-        // 2. 构建 prompt
+        // 2. 构建初始 prompt
         console.log('🤖 构建 Gemini prompt...');
-        const prompt = buildGeminiPrompt(reaction, canvasWidth, canvasHeight);
+        let prompt = buildGeminiPrompt(reaction, canvasWidth, canvasHeight);
         
-        // 3. 调用 Gemini API
-        console.log('🌐 调用 Gemini 2.5 Pro API...');
-        const geminiResponse = await callGeminiAPI(prompt);
-        console.log('✅ Gemini 响应:', geminiResponse);
+        // 3. 迭代生成与验证循环 (Dimension 5: Iterative Refinement)
+        const MAX_RETRIES = 3;
+        let lastError = null;
         
-        // 4. 根据选项生成单个或多个图表
-        if (generateAll && geminiResponse.diagrams && geminiResponse.diagrams.length > 1) {
-            // 生成所有图表，返回数组
-            console.log(`🎨 生成所有 ${geminiResponse.diagrams.length} 个图表...`);
-            const results = [];
+        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            console.log(`🔄 尝试生成 (第 ${attempt}/${MAX_RETRIES} 次)...`);
             
-            for (let i = 0; i < geminiResponse.diagrams.length; i++) {
-                const diagram = geminiResponse.diagrams[i];
-                console.log(`  处理第 ${i + 1} 个图表: ${diagram.name}`);
-                
-                // 创建临时响应对象（只包含当前图表）
-                const singleDiagramResponse = {
-                    valid: geminiResponse.valid,
-                    interaction_type: geminiResponse.interaction_type,
-                    diagrams: [diagram],
-                    explanation: geminiResponse.explanation
-                };
-                
-                const result = convertToShapes(singleDiagramResponse, canvasWidth, canvasHeight);
-                result.diagramName = diagram.name; // 添加图表名称
-                result.diagramIndex = i;
-                results.push(result);
+            if (attempt > 1 && lastError) {
+                console.log('⚠️ 上一次生成存在物理错误，正在请求 Gemini 修正...');
+                // 将错误信息追加到 prompt
+                prompt += `\n\n**PREVIOUS ATTEMPT FAILED**\nYour previous JSON was invalid. \nErrors:\n${lastError}\n\n**PLEASE FIX THE ERRORS AND REGENERATE THE JSON.**`;
             }
+
+            // 调用 Gemini API
+            const geminiResponse = await callGeminiAPI(prompt);
+            console.log('✅ Gemini 响应:', geminiResponse);
             
-            console.log(`✅ 成功生成 ${results.length} 个图表`);
-            return results;
-            
-        } else {
-            // 只生成第一个图表
-            console.log('🎨 转换为绘图数据...');
-            const result = convertToShapes(geminiResponse, canvasWidth, canvasHeight);
-            result.diagramName = geminiResponse.diagrams[0]?.name || 'Main Diagram';
-            console.log('✅ 转换成功，生成了', result.shapes.length, '个形状');
-            return result;
+            // 验证逻辑
+            try {
+                // 先尝试转换第一个图表进行验证
+                // 注意：convertToShapes 可能会抛出异常（如果 JSON 结构不对）
+                const tempResult = convertToShapes(geminiResponse, canvasWidth, canvasHeight);
+                
+                // 调用物理验证引擎 (如果存在)
+                if (window.validateDiagram) {
+                    const validation = window.validateDiagram(tempResult.shapes);
+                    
+                    if (validation.isValid) {
+                        console.log('✅ 物理验证通过！');
+                        
+                        // 验证通过，处理返回结果
+                        if (generateAll && geminiResponse.diagrams && geminiResponse.diagrams.length > 1) {
+                            // 生成所有图表
+                            console.log(`🎨 生成所有 ${geminiResponse.diagrams.length} 个图表...`);
+                            const results = [];
+                            
+                            for (let i = 0; i < geminiResponse.diagrams.length; i++) {
+                                const diagram = geminiResponse.diagrams[i];
+                                // 为每个图表单独构造响应对象以便转换
+                                const singleDiagramResponse = {
+                                    valid: geminiResponse.valid,
+                                    interaction_type: geminiResponse.interaction_type,
+                                    diagrams: [diagram],
+                                    explanation: geminiResponse.explanation
+                                };
+                                
+                                const result = convertToShapes(singleDiagramResponse, canvasWidth, canvasHeight);
+                                result.diagramName = diagram.name;
+                                result.diagramIndex = i;
+                                results.push(result);
+                            }
+                            
+                            console.log(`✅ 成功生成 ${results.length} 个图表`);
+                            return results;
+                            
+                        } else {
+                            // 只返回第一个图表
+                            console.log('🎨 转换为绘图数据...');
+                            tempResult.diagramName = geminiResponse.diagrams[0]?.name || 'Main Diagram';
+                            console.log('✅ 转换成功，生成了', tempResult.shapes.length, '个形状');
+                            return tempResult;
+                        }
+                    } else {
+                        // 验证失败
+                        console.warn('⚠️ 物理验证失败:', validation.errors);
+                        lastError = validation.errors.join('\n');
+                        // 继续下一次循环，Gemini 会收到错误反馈
+                        continue;
+                    }
+                } else {
+                    console.warn('⚠️ 找不到 window.validateDiagram，跳过验证');
+                    // 如果没有验证引擎，直接返回结果（保持向后兼容）
+                    tempResult.diagramName = geminiResponse.diagrams[0]?.name || 'Main Diagram';
+                    return tempResult;
+                }
+                
+            } catch (conversionError) {
+                console.error('❌ 转换或验证过程出错:', conversionError);
+                lastError = conversionError.message;
+                // 继续下一次循环
+                continue;
+            }
         }
+        
+        throw new Error(`生成失败，已重试 ${MAX_RETRIES} 次。最后一次错误: ${lastError}`);
         
     } catch (error) {
         console.error('❌ 生成费曼图失败:', error);
