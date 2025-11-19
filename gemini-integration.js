@@ -171,7 +171,7 @@ const PARTICLE_SYMBOLS = {
  * - "$gamma$ + $e-$ $->$ $gamma$ + $e-$"
  */
 function parseReaction(input) {
-    // 标准化输入 - 移除多余空格
+    // 标准化输入 - 称除多余空格
     input = input.trim();
     
     // 分割初态和末态 - 使用 $->$ 作为分隔符
@@ -255,162 +255,85 @@ Before generating the JSON, you MUST analyze the reaction step-by-step in a "phy
 4.  List the vertices and the particles entering/leaving each vertex.
 5.  **For QCD:** Explicitly trace the color flow (e.g., "Red quark emits Red-AntiBlue gluon, becoming Blue quark").
 
-**DIMENSION 2: NORMALIZED COORDINATES**
--   **Use NORMALIZED COORDINATES (0.0 to 1.0) for all positions.**
--   x=0.0 is the left edge, x=1.0 is the right edge.
--   y=0.0 is the top edge, y=1.0 is the bottom edge.
--   Initial particles start at x=0.1.
--   Final particles end at x=0.9.
--   Interaction vertices should be around x=0.5.
+**DIMENSION 2: TOPOLOGICAL GRAPH VECTOR (NO COORDINATES)**
+-   **Do NOT output coordinates (x, y).**
+-   Only output the connection logic (nodes and edges).
+-   **Nodes:** Define vertices with IDs and types ("initial", "final", "interaction").
+-   **Edges:** Define connections between nodes with particle properties.
 
 **DIMENSION 3: QCD COLOR RULES**
 -   **Color Conservation:** The net color entering a vertex MUST equal the net color leaving it.
 -   **Gluons:** Must carry a color and an anti-color (e.g., "red-antiblue").
 -   **Quarks:** Must have a single color (red, green, blue).
 -   **Anti-Quarks:** Must have a single anti-color (anti-red, anti-green, anti-blue).
--   **Example:** u(red) -> d(blue) + W+(virtual) is INVALID. Flavor change is Weak, but Color change requires Gluon.
--   **Correct QCD Vertex:** u(red) -> u(blue) + g(red-antiblue).
 
 **CRITICAL RULES:**
 1.  **ONLY generate LOWEST-ORDER (tree-level) diagrams** - NO loop diagrams, NO radiative corrections
-2.  **For flow diagrams: Minimize additional gluon exchanges** - Since we draw the lowest-degree Feynman diagrams, avoid drawing extra gluons to keep diagrams simple. However, strong interactions are still valid - this is about diagram simplicity, not physics constraints.
-3.  **Generate ALL possible tree-level channels:**
-    *   For e⁻e⁺ → μ⁻μ⁺: Generate s-channel with virtual photon (γ*) AND Z⁰ (two separate diagrams)
-    *   For e⁻e⁺ → e⁻e⁺ (Bhabha): Generate s-channel AND t-channel (two separate diagrams)
-    *   For quark weak decays: Generate the tree-level W± exchange diagram ONLY
-    *   For FCNC processes: If tree-level is FORBIDDEN, generate penguin loop diagram (as the lowest physical order)
-4.  **Put each diagram in the "diagrams" array** - Each channel is a separate diagram object
+2.  **For flow diagrams: Minimize additional gluon exchanges** - Keep diagrams simple.
+3.  **Generate ALL possible tree-level channels.**
+4.  **Put each diagram in the "diagrams" array.**
 
-**DIAGRAM TYPE SELECTION:**
--   **DEFAULT: Tree-level diagrams ONLY** (e⁻e⁺→μ⁻μ⁺, quark weak decay, etc.)
--   **EXCEPTION: For FCNC processes ONLY** (b→s transitions with γ/Z, forbidden at tree level): Use penguin loop diagram as the "lowest physical order"
--   **For simplicity in lowest-order diagrams: Avoid additional gluon radiative corrections** - Focus on the dominant process, but strong interactions are still physically valid
-
-**EXAMPLES OF LOWEST-ORDER DIAGRAMS:**
--   e⁻ + e⁺ → μ⁻ + μ⁺: Two tree-level diagrams (s-channel via γ*, s-channel via Z⁰)
--   e⁻ + e⁺ → e⁻ + e⁺: Two tree-level diagrams (s-channel via γ*, t-channel via γ)
--   u → d + W⁺ (quark weak decay): One tree-level diagram (gluon corrections omitted for simplicity)
--   b → s + γ (FCNC): One loop diagram (penguin with W boson loop, quarks on horizontal line) - exception because tree-level is forbidden
-
-**CRITICAL REQUIREMENTS:**
-1.  ALL initial state particles MUST start from x=0.1 (left boundary)
-2.  ALL final state particles MUST end at x=0.9 (right boundary)
-3.  Create intermediate vertices in the middle region (x around 0.5)
-4.  **Virtual particle lines MUST have visible length (at least 0.15 separation in x or y)**
-5.  EVERY line must connect two vertices - no dangling lines
-6.  For loop diagrams, define the loop structure explicitly
-
-**Physical Rules (Tree-Level Only):**
--   Photons (γ) only couple to charged particles
--   **For lowest-order diagrams: Minimize additional gluon exchanges for simplicity** - Gluons are valid for strong interactions, but we focus on the simplest lowest-degree diagrams
--   W± bosons can change quark flavor (u and d, c and s, t and b) at tree level
--   Z0 bosons couple to all fermions but do NOT change flavor
--   Conserve charge, lepton number, baryon number at each vertex
--   **FCNC processes (b→s, s→d with γ/Z) require loop diagrams** - Tree level is forbidden by SM
--   Virtual particles connect internal vertices only
-
-**PENGUIN DIAGRAM STRUCTURE (Semi-Circle Shape):**
-**CRITICAL: The penguin diagram MUST be a semi-circle.**
--   The ARC of the semi-circle is the W boson.
--   The DIAMETER of the semi-circle is the intermediate quark line.
--   The photon/Z boson radiates from the W boson arc.
-
-**PENGUIN DIAGRAM JSON STRUCTURE:**
--   The "loops" array should contain ONE object with \`type: "penguin_loop"\`.
--   The \`vertices\` property in the loop object MUST contain exactly 3 vertices: \`[start_of_diameter, end_of_diameter, arc_midpoint]\`.
--   The \`particles\` property should list: \`[intermediate_quark_id, w_boson_id]\`.
--   **CRITICAL**: Use standard particle IDs only: "w_plus" or "w_minus" (NOT "w_boson").
--   **For anti-quarks, use standard IDs with isAnti flag**: e.g., {"id": "t", "isAnti": true} NOT "t_bar".
-
-**CORRECT PENGUIN JSON EXAMPLE:**
+**STRICT JSON SCHEMA:**
+You MUST follow this exact JSON structure. Do not deviate.
 \\\`\\\`\\\`json
 {
-  "physics_analysis": "b quark decays into s quark via loop. b emits W-, becoming t. W- and t recombine to s. Photon emitted from W-.",
+  "physics_analysis": "...",
   "valid": true,
-  "interaction_type": "weak_loop",
+  "interaction_type": "electromagnetic" | "weak" | "strong",
   "diagrams": [
     {
-      "name": "penguin-diagram",
-      "vertices": [
-        {"id": "v1", "position": {"x": 0.1, "y": 0.5}},
-        {"id": "v2", "position": {"x": 0.3, "y": 0.5}},
-        {"id": "v3", "position": {"x": 0.7, "y": 0.5}},
-        {"id": "v4", "position": {"x": 0.5, "y": 0.25}},
-        {"id": "v6", "position": {"x": 0.9, "y": 0.5}},
-        {"id": "v7", "position": {"x": 0.9, "y": 0.3}},
-        {"id": "v8", "position": {"x": 0.9, "y": 0.7}}
+      "name": "diagram-name",
+      "nodes": [
+        { "id": "n1", "type": "initial" | "final" | "interaction" }
       ],
-      "lines": [
-        {"from": "v1", "to": "v2", "particle": {"id": "b", "category": "fermion", "group": "quark_d", "color": "red"}},
-        {"from": "v3", "to": "v6", "particle": {"id": "s", "category": "fermion", "group": "quark_d", "color": "red"}},
-        {"from": "v4", "to": "v6", "particle": {"id": "photon", "category": "boson", "isVirtual": true}},
-        {"from": "v6", "to": "v7", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
-        {"from": "v6", "to": "v8", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
-      ],
-      "loops": [
+      "edges": [
         {
-          "id": "loop1",
-          "type": "penguin_loop",
-          "vertices": ["v2", "v3", "v4"],
-          "particles": ["u", "w_minus"],
-          "description": "Penguin loop: b->s transition. Diameter (v2-v3) is intermediate u-quark. Arc is W-minus boson (as two lines). Photon radiates from W arc midpoint."
+          "source": "n1",
+          "target": "n2",
+          "particle": {
+            "id": "particle_id", // MUST be one of the allowed IDs below
+            "category": "fermion" | "boson",
+            "group": "lepton" | "quark_u" | "quark_d" | "boson", // REQUIRED. See Reference Table below.
+            "isAnti": boolean,
+            "isVirtual": boolean,
+            "color": "red" | "green" | "blue" | "anti-red" | "anti-green" | "anti-blue" | "red-antiblue" ... // Optional
+          }
+        }
+      ],
+      "loops": [ // Optional, only for penguin diagrams
+        {
+          "vertices": ["v1", "v2", "v3"], // MUST use "vertices" key, NOT "arc"
+          "type": "penguin_loop"
         }
       ]
     }
-  ],
-  "explanation": "Penguin diagram: b→s transition via a semi-circle loop. The diameter is the intermediate up-type quark and the arc is the W boson. A photon is emitted from the W boson arc."
+  ]
 }
 \\\`\\\`\\\`
 
-**TREE-LEVEL DIAGRAM STRUCTURE (for simple processes):**
-\\\`\\\`\\\`json
-{
-  "physics_analysis": "e- and e+ annihilate into a virtual photon, which then decays into mu- and mu+.",
-  "valid": true,
-  "interaction_type": "electromagnetic",
-  "diagrams": [
-    {
-      "name": "s-channel-photon",
-      "vertices": [
-        {"id": "v1", "position": {"x": 0.1, "y": 0.3}},
-        {"id": "v2", "position": {"x": 0.1, "y": 0.7}},
-        {"id": "v3", "position": {"x": 0.5, "y": 0.5}},
-        {"id": "v4", "position": {"x": 0.7, "y": 0.5}},
-        {"id": "v5", "position": {"x": 0.9, "y": 0.3}},
-        {"id": "v6", "position": {"x": 0.9, "y": 0.7}}
-      ],
-      "lines": [
-        {"from": "v1", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": false}},
-        {"from": "v2", "to": "v3", "particle": {"id": "e", "category": "fermion", "group": "lepton", "isAnti": true}},
-        {"from": "v3", "to": "v4", "particle": {"id": "photon", "category": "boson", "isVirtual": true}},
-        {"from": "v4", "to": "v5", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": false}},
-        {"from": "v4", "to": "v6", "particle": {"id": "mu", "category": "fermion", "group": "lepton", "isAnti": true}}
-      ]
-    }
-  ],
-  "explanation": "s-channel diagrams: e⁻e⁺ can annihilate via virtual photon γ* or Z⁰ boson, producing μ⁻μ⁺ pair"
-}
-\\\`\\\`\\\`
+**PARTICLE REFERENCE TABLE (STRICTLY FOLLOW THIS):**
+You MUST use the exact "id", "category", and "group" from this table.
 
-**CRITICAL - Lowest Order Diagrams Only:** 
--   **Generate ALL tree-level channels** (e.g., both γ* and Z⁰ for e⁻e⁺→μ⁻μ⁺, both s-channel and t-channel for scattering)
--   **Minimize additional gluon radiative corrections** - For simplicity in lowest-order flow diagrams, avoid extra gluons (though they are physically valid for strong interactions)
--   **NO Higgs exchange** unless explicitly requested (Higgs coupling is very weak)
--   Each channel in separate object in "diagrams" array
--   Virtual particle line MUST have at least 0.15 normalized separation
--   Initial particles (e⁻, e⁺) start at x=0.1
--   Final particles (μ⁻, μ⁺) end at x=0.9
+| Particle Name | ID | Category | Group |
+| :--- | :--- | :--- | :--- |
+| Electron, Muon, Tau | e, mu, tau | fermion | lepton |
+| Neutrinos | nu_e, nu_mu, nu_tau | fermion | lepton |
+| Up, Charm, Top Quarks | u, c, t | fermion | quark_u |
+| Down, Strange, Bottom Quarks | d, s, b | fermion | quark_d |
+| Photon, Gluon, Z, Higgs | photon, gluon, z, higgs | boson | boson |
+| W Bosons | w_plus, w_minus | boson | boson |
 
-**IMPORTANT RULES:** 
--   Particle IDs: e, mu, tau, nu_e, nu_mu, nu_tau, u, d, c, s, t, b, photon, w_plus, w_minus, z, higgs, gluon
--   **For lowest-order flow diagrams: Minimize gluon additions** - Gluons are valid for strong interactions, but we focus on simplest diagrams
--   For fermions, set "isAnti": true for antiparticles
--   **For QUARKS, MUST include "color": "red"/"green"/"blue"**
--   **For ANTIQUARKS, MUST include "color": "anti-red"/"anti-green"/"anti-blue"**
--   **For virtual particles in loops, set "isVirtual": true**
--   **FCNC processes (b→s, s→d with Z/γ) use loop diagrams with "loops" array** (exception: tree level forbidden)
--   **For PENGUIN loops, \`type\` MUST be \`penguin_loop\` and \`vertices\` MUST be \`[diameter_start, diameter_end, arc_midpoint]\`**
--   Generate the complete JSON now for: ${initialParticles} → ${finalParticles}`;
+**PHYSICS CORRECTION RULES:**
+-   **Anti-Quark Weak Decay:** Ensure W boson charge is correct.
+    -   Example: b_bar (+1/3) -> c_bar (-2/3) + W_plus (+1). (Correct)
+    -   Example: b_bar (+1/3) -> c_bar (-2/3) + W_minus (-1). (INCORRECT - Charge violation)
+-   **Penguin Loops:** If the process is b -> s (FCNC), use a penguin loop. The loop usually involves a virtual top quark (t) and a W boson.
+
+**DIAGRAM TYPE SELECTION:**
+-   **DEFAULT: Tree-level diagrams ONLY**
+-   **EXCEPTION: For FCNC processes ONLY** (b→s transitions with γ/Z): Use penguin loop diagram.
+
+**Generate the complete JSON now for:** ${initialParticles} → ${finalParticles}`;
 
     return prompt;
 }
@@ -556,7 +479,6 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
     console.log(`📊 Gemini 返回了 ${geminiResponse.diagrams.length} 个费曼图`);
     
     // 🎨 如果有多个图表,选择第一个(用户可以通过 canvas 切换查看其他图)
-    // TODO: 未来可以添加 UI 让用户选择要显示哪个图
     const diagram = geminiResponse.diagrams[0];
     
     if (geminiResponse.diagrams.length > 1) {
@@ -565,36 +487,193 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
     }
     
     // 检查图表是否有必要的数据
-    if (!diagram.vertices || !diagram.lines) {
-        throw new Error('费曼图缺少顶点或线条数据');
+    // 新格式：nodes 和 edges
+    if (!diagram.nodes || !diagram.edges) {
+        // 兼容旧格式（如果 Gemini 偶尔返回旧格式）
+        if (diagram.vertices && diagram.lines) {
+            console.warn('⚠️ Gemini 返回了旧格式数据 (vertices/lines)，尝试兼容...');
+            // 将旧格式转换为新格式
+            diagram.nodes = diagram.vertices.map(v => ({ id: v.id, type: v.type || 'interaction' }));
+            diagram.edges = diagram.lines.map(l => ({ source: l.from, target: l.to, particle: l.particle }));
+        } else {
+            throw new Error('费曼图缺少节点或边数据 (nodes/edges)');
+        }
+    }
+
+    // 🔧 FORCE PENGUIN TOPOLOGY (User Request: W-W-Quark triangle with Z emitted from W-W vertex)
+    // This overrides Gemini's physics choice to ensure the visual style matches the user's expectation
+    if (diagram.loops && diagram.loops.length > 0) {
+        diagram.loops.forEach(loop => {
+            if (loop.type === 'penguin_loop' && loop.vertices && loop.vertices.length === 3) {
+                const vIds = loop.vertices;
+                
+                // Find emission vertex (connected to Z/Photon/Gluon)
+                let emissionVertexId = null;
+                diagram.edges.forEach(e => {
+                    if (vIds.includes(e.source) && !vIds.includes(e.target)) {
+                        if (['z', 'photon', 'gluon', 'higgs'].includes(e.particle.id)) {
+                            emissionVertexId = e.source;
+                        }
+                    }
+                });
+
+                if (emissionVertexId) {
+                    console.log(`🔧 Enforcing Penguin Topology: Z/Photon emission at ${emissionVertexId}`);
+                    const baseVertices = vIds.filter(id => id !== emissionVertexId);
+                    
+                    if (baseVertices.length === 2) {
+                        // Determine if we are dealing with particles or anti-particles based on input
+                        let isAntiContext = false;
+                        diagram.edges.forEach(e => {
+                            if (baseVertices.includes(e.target) && e.particle.category === 'fermion') {
+                                if (e.particle.isAnti) isAntiContext = true;
+                            }
+                        });
+
+                        diagram.edges.forEach(e => {
+                            const isLoopEdge = vIds.includes(e.source) && vIds.includes(e.target);
+                            if (!isLoopEdge) return;
+
+                            const connectedToEmission = e.source === emissionVertexId || e.target === emissionVertexId;
+                            
+                            if (connectedToEmission) {
+                                // Sides of the triangle -> W Boson
+                                e.particle.id = isAntiContext ? 'w_plus' : 'w_minus';
+                                e.particle.category = 'boson';
+                                e.particle.group = 'boson';
+                                delete e.particle.color;
+                                delete e.particle.isAnti;
+                            } else {
+                                // Base of the triangle -> Heavy Quark (Top)
+                                e.particle.id = 't';
+                                e.particle.category = 'fermion';
+                                e.particle.group = 'quark_u';
+                                e.particle.isAnti = isAntiContext;
+                                e.particle.color = isAntiContext ? 'anti-red' : 'red';
+                            }
+                        });
+                    }
+                }
+            }
+        });
+    }
+
+    // === 使用 FeynmanLayoutEngine 计算坐标 ===
+    console.log('📐 正在使用 FeynmanLayoutEngine 计算布局...');
+    if (!window.FeynmanLayoutEngine) {
+        throw new Error('FeynmanLayoutEngine 未加载');
     }
     
+    const layoutEngine = new window.FeynmanLayoutEngine(canvasWidth, canvasHeight);
+    const positions = layoutEngine.calculateLayout({ nodes: diagram.nodes, edges: diagram.edges });
+
+    // 🔧 Spectator Line Handling: Move spectators to edges to avoid crossing the diagram
+    // Spectators are direct connections between initial and final states
+    const spectatorEdges = diagram.edges.filter(e => {
+        const sourceNode = diagram.nodes.find(n => n.id === e.source);
+        const targetNode = diagram.nodes.find(n => n.id === e.target);
+        return sourceNode && targetNode && 
+               sourceNode.type === 'initial' && targetNode.type === 'final';
+    });
+
+    if (spectatorEdges.length > 0) {
+        console.log(`🔧 Found ${spectatorEdges.length} spectator edges, moving them to boundaries...`);
+        const topY = 50;
+        const bottomY = canvasHeight - 50;
+        
+        spectatorEdges.forEach((edge, idx) => {
+            // Alternate between top and bottom to avoid overlapping multiple spectators
+            const isTop = idx % 2 === 0;
+            const y = isTop ? (topY + idx * 30) : (bottomY - (idx * 30));
+            
+            if (positions[edge.source]) positions[edge.source].y = y;
+            if (positions[edge.target]) positions[edge.target].y = y;
+        });
+    }
+    
+    // 🔧 Post-processing: Ensure nodes are not too close (Collision Resolution)
+    // This prevents "monster vertices" where multiple nodes collapse into one
+    const MIN_DISTANCE = 40; // Minimum distance between nodes
+    const nodeIds = Object.keys(positions);
+    
+    for (let i = 0; i < nodeIds.length; i++) {
+        for (let j = i + 1; j < nodeIds.length; j++) {
+            const id1 = nodeIds[i];
+            const id2 = nodeIds[j];
+            const p1 = positions[id1];
+            const p2 = positions[id2];
+            
+            if (!p1 || !p2) continue;
+            
+            const dx = p1.x - p2.x;
+            const dy = p1.y - p2.y;
+            const dist = Math.hypot(dx, dy);
+            
+            if (dist < MIN_DISTANCE) {
+                console.warn(`⚠️ Nodes ${id1} and ${id2} are too close (${dist.toFixed(1)}px), separating...`);
+                // Simple separation: move p2 away from p1
+                // If they are at the exact same position, move p2 randomly
+                let moveX = dx === 0 ? (Math.random() - 0.5) : dx;
+                let moveY = dy === 0 ? (Math.random() - 0.5) : dy;
+                
+                // Normalize and scale
+                const len = Math.hypot(moveX, moveY) || 1;
+                moveX = (moveX / len) * (MIN_DISTANCE - dist + 5);
+                moveY = (moveY / len) * (MIN_DISTANCE - dist + 5);
+                
+                // Apply to p2 (and maybe p1 in opposite direction)
+                // Only move Y if possible to preserve layers (X)
+                // But for safety, move both
+                p2.x -= moveX * 0.5;
+                p2.y -= moveY * 0.5;
+                p1.x += moveX * 0.5;
+                p1.y += moveY * 0.5;
+            }
+        }
+    }
+
     // 构建顶点映射
     const vertexMap = {};
-    diagram.vertices.forEach(v => {
-        // 支持归一化坐标 (0.0-1.0) 或 绝对坐标
-        let x = v.position.x;
-        let y = v.position.y;
-        
-        // 如果坐标在 0-1 之间，认为是归一化坐标
-        if (x <= 1.0 && x >= 0.0) x = x * canvasWidth;
-        if (y <= 1.0 && y >= 0.0) y = y * canvasHeight;
-
-        vertexMap[v.id] = {
-            x: x,
-            y: y,
-            type: v.type || 'normal'  // 标记顶点类型：external, internal, loop
-        };
+    diagram.nodes.forEach(node => {
+        const pos = positions[node.id];
+        if (!pos) {
+            console.warn(`⚠️ 节点 ${node.id} 未分配坐标，使用默认值`);
+            vertexMap[node.id] = { x: canvasWidth / 2, y: canvasHeight / 2, type: node.type };
+        } else {
+            vertexMap[node.id] = { x: pos.x, y: pos.y, type: node.type };
+        }
     });
     
     // 🔧 检查是否有环路定义
-    const hasLoops = diagram.loops && diagram.loops.length > 0;
+    let loops = diagram.loops || [];
+
+    // 兼容性处理：如果 loops 是数组的数组 (Gemini 返回 [["v1", "v2", "v3"]])
+    if (loops.length > 0 && Array.isArray(loops[0])) {
+        console.warn('⚠️ Gemini 返回了简化的 loops 格式 (ID数组列表)，自动转换为对象格式');
+        loops = loops.map((loopIds, idx) => ({
+            vertices: loopIds,
+            type: 'penguin_loop', // 默认为企鹅图
+            id: `generated_loop_${idx}`
+        }));
+    }
+    // 兼容性处理：如果 loops 是字符串数组 (Gemini 返回 ["v1", "v2", "v3"]) - 虽然少见但以防万一
+    else if (loops.length > 0 && typeof loops[0] === 'string') {
+        console.warn('⚠️ Gemini 返回了简化的 loops 格式 (单ID数组)，自动转换为对象格式');
+        loops = [{
+            vertices: [...loops],
+            type: 'penguin_loop',
+            id: 'generated_loop_0'
+        }];
+    }
+
+    const hasLoops = loops.length > 0;
     
     // 🔧 如果有环路，将它们转换为可绘制的 loop 形状
     if (hasLoops) {
-        diagram.loops.forEach((loop, loopIdx) => {
+        loops.forEach((loop, loopIdx) => {
             // 确保环路顶点存在
-            const loopVertices = loop.vertices
+            const verticesList = loop.vertices || loop.arc || [];
+            const loopVertices = verticesList
                 .map(vId => vertexMap[vId])
                 .filter(v => v); // 过滤掉未找到的顶点
 
@@ -603,7 +682,7 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
                 return;
             }
 
-            console.log(`  ✨ 创建环路形状: ${loop.id || `loop${loopIdx}`}, 类型: ${loop.type}`);
+            console.log(`  ✨ 处理环路顶点位置: ${loop.id || `loop${loopIdx}`}, 类型: ${loop.type}`);
 
             // 🔧 提取粒子ID（处理对象格式）
             const particleIds = (loop.particles || []).map(p => {
@@ -612,6 +691,9 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
                 return 'unknown';
             });
             
+            // ⚠️ 禁用 Loop Shape 的直接绘制，因为这会导致与 Edge Shape 重叠 (Double Drawing)
+            // 我们只利用 Loop 逻辑来修正顶点位置 (correctedArc)，让 Edge 绘制出正确的形状
+            /*
             shapes.push({
                 id: Date.now() + 1000 + loopIdx * 10, // 确保ID唯一
                 type: 'loop', // 统一使用 'loop' 类型
@@ -622,13 +704,18 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
                     description: loop.description || ''
                 }
             });
+            */
             
             // 🔧 如果是企鹅图，重新计算圆弧顶点位置并更新 vertexMap
+            // 注意：LayoutEngine 可能已经给出了一个位置，但为了完美的半圆，我们可能需要微调
+            // 这里我们信任 LayoutEngine 的拓扑位置，但如果它是 arc_midpoint，我们可能需要根据直径重新计算它的几何位置以确保它是完美的半圆
             if (loop.type === 'penguin_loop' && loopVertices.length === 3) {
                 const p1 = loopVertices[0];
                 const p2 = loopVertices[1];
                 const diameter = Math.hypot(p2.x - p1.x, p2.y - p1.y);
                 const radius = diameter / 2;
+                
+                // 计算理想的圆弧顶点位置
                 const correctedArc = {
                     x: (p1.x + p2.x) / 2,
                     y: (p1.y + p2.y) / 2 - radius * 0.85
@@ -637,7 +724,8 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
                 // 更新 vertexMap 中的圆弧顶点坐标
                 const arcVertexId = loop.vertices[2]; // 第三个顶点是圆弧顶点
                 if (vertexMap[arcVertexId]) {
-                    console.log(`🔧 修正企鹅图圆弧顶点 ${arcVertexId}: (${vertexMap[arcVertexId].x}, ${vertexMap[arcVertexId].y}) -> (${correctedArc.x}, ${correctedArc.y})`);
+                    // 总是修正以保证完美的半圆形状
+                    console.log(`🔧 修正企鹅图圆弧顶点 ${arcVertexId}: (${vertexMap[arcVertexId].x.toFixed(1)}, ${vertexMap[arcVertexId].y.toFixed(1)}) -> (${correctedArc.x.toFixed(1)}, ${correctedArc.y.toFixed(1)})`);
                     vertexMap[arcVertexId].x = correctedArc.x;
                     vertexMap[arcVertexId].y = correctedArc.y;
                     loopVertices[2] = correctedArc; // 同时更新 loop 对象中的顶点
@@ -646,18 +734,65 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
         });
     }
 
+    // 🔧 Z-Boson / Photon Emission Angle Fix
+    // Ensure neutral bosons emitted from the loop point "outwards" (upwards in this case)
+    if (hasLoops) {
+        const loopArcVertices = new Set();
+        loops.forEach(loop => {
+            if (loop.vertices && loop.vertices.length >= 3) {
+                // The 3rd vertex is usually the arc top in a penguin loop
+                loopArcVertices.add(loop.vertices[2]);
+            }
+        });
+
+        diagram.edges.forEach(edge => {
+            if (['z', 'photon', 'gluon', 'higgs'].includes(edge.particle.id)) {
+                if (loopArcVertices.has(edge.source)) {
+                    const sourcePos = vertexMap[edge.source];
+                    const targetPos = vertexMap[edge.target];
+                    
+                    if (sourcePos && targetPos) {
+                        // Force target to be above source (smaller Y)
+                        // And ensure some vertical distance
+                        const MIN_VERTICAL_DIST = 60;
+                        
+                        if (targetPos.y >= sourcePos.y - MIN_VERTICAL_DIST) {
+                            console.log(`🔧 Adjusting ${edge.particle.id} emission angle to be upwards`);
+                            targetPos.y = sourcePos.y - MIN_VERTICAL_DIST - (Math.random() * 20);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 🔧 Deduplicate edges to prevent "ghosting" or multiple lines
+    const uniqueEdges = [];
+    const seenEdges = new Set();
+    
+    diagram.edges.forEach(edge => {
+        // Create a unique key for the edge
+        const key = `${edge.source}-${edge.target}-${edge.particle.id}`;
+        if (!seenEdges.has(key)) {
+            seenEdges.add(key);
+            uniqueEdges.push(edge);
+        } else {
+            console.warn(`⚠️ Duplicate edge detected and removed: ${key}`);
+        }
+    });
+
     // 转换线条为 shapes
-    diagram.lines.forEach((line, idx) => {
-        const p1 = vertexMap[line.from];
-        const p2 = vertexMap[line.to];
+    uniqueEdges.forEach((edge, idx) => {
+        const p1 = vertexMap[edge.source];
+        const p2 = vertexMap[edge.target];
         
         if (!p1 || !p2) {
-            console.warn(`无法找到顶点 ${line.from} 或 ${line.to}`);
+            console.warn(`无法找到顶点 ${edge.source} 或 ${edge.target}`);
             return;
         }
         
         // 构建粒子属性
-        const particle = line.particle;
+        const particle = edge.particle;
         
         // 🔧 处理反粒子后缀（如 t_bar -> t + isAnti）
         let particleId = particle.id;
@@ -668,6 +803,13 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
             isAntiParticle = true;
             console.log(`  🔧 检测到反粒子后缀: ${particle.id} -> ${particleId} (isAnti=true)`);
         }
+
+        // 🔧 处理 q_up_type (GIM 机制中的上型夸克求和)
+        if (particleId === 'q_up_type') {
+            console.log('  🔧 检测到 q_up_type，映射为顶夸克 (t) 以进行物理验证');
+            particleId = 't'; // 默认映射为最重的顶夸克，通常是主导贡献
+            // 保持 isAnti 属性不变
+        }
         
         const props = {
             category: particle.category,
@@ -675,7 +817,7 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
         };
         
         // ✅ 添加所有 Gemini 提供的属性（保持原始数据）
-        if (particle.group === 'lepton' || particle.group === 'quark_u' || particle.group === 'quark_d') {
+        if (particle.group === 'lepton' || particle.group === 'quark_u' || particle.group === 'quark_d' || particle.group === 'boson') {
             // 标准格式：直接使用
             props.group = particle.group;
         } else if (particle.group === 'quark' || particle.category === 'fermion') {
@@ -684,16 +826,16 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
             const quarks_u = ['u', 'c', 't'];
             const quarks_d = ['d', 's', 'b'];
             
-            if (leptons.includes(particle.id)) {
+            if (leptons.includes(particleId)) {
                 props.group = 'lepton';
-            } else if (quarks_u.includes(particle.id)) {
+            } else if (quarks_u.includes(particleId)) {
                 props.group = 'quark_u';
                 console.log(`  🔧 自动将 ${particle.id} 的 group 从 '${particle.group || 'undefined'}' 修正为 'quark_u'`);
-            } else if (quarks_d.includes(particle.id)) {
+            } else if (quarks_d.includes(particleId)) {
                 props.group = 'quark_d';
                 console.log(`  🔧 自动将 ${particle.id} 的 group 从 '${particle.group || 'undefined'}' 修正为 'quark_d'`);
             } else {
-                console.warn(`未知的费米子 ${particle.id}，默认为轻子`);
+                console.warn(`未知的费米子 ${particle.id} (mapped to ${particleId})，默认为轻子`);
                 props.group = 'lepton';
             }
         }
@@ -718,6 +860,12 @@ function convertToShapes(geminiResponse, canvasWidth, canvasHeight) {
             finalP1 = p2;
             finalP2 = p1;
             // ⚠️ 不要在这里设置 props.isAnti，让 feynman-logic.js 根据方向自动判断
+        } else if (particle.id === 'w_plus') {
+            // 🔧 W+ 玻色子：feynman-logic.js 默认将其视为从右向左流动的粒子 (flowFromV1ToV2 = false)
+            // 因此我们需要交换坐标，使得逻辑上的"反向"对应物理上的"正向" (Source -> Target)
+            finalP1 = p2;
+            finalP2 = p1;
+            console.log(`  🔧 检测到 W+ 玻色子，交换坐标以匹配物理流向`);
         } else if (particle.category === 'fermion') {
             // 正粒子：保持原方向（从 p1 到 p2）
             // 确保 p1.x < p2.x
