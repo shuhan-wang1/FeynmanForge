@@ -140,3 +140,33 @@ This is a static, frontend-only application. No server or build-step is required
 ![1763406960151](image/README/1763406960151.png)
 
 ![1763406936482](image/README/1763406936482.png)
+
+# How AI generate diagram works:
+## Stage 1: Input parsing and prompt engineering
+**Input:** The system will first extract user's input and find out initial and final state particles. The prompt is design to provide 3-fold answers. 
+   1. Chain of thought: Ask model to think step by step how is the interaction, conservation laws works.
+   2. Graph vector: Ask model to provide a graph vector representation of the Feynman diagram, forbidding any $(x,y)$ coordinate output. Forcing model to focus the topological structure of the physical interaction.
+   3. Constraints check: Check if the output particles can maps to the existing particle chart making sure following program can read the output.
+
+## Stage 2: Graph Vector model:
+Gemini's output is a Directed Acyclic Graph (DAG) representation of the Feynman diagram. Each node represents a vertex, and edges represent particles. 
+
+For every nodes in the graph, it contains the following properties:
+    1. id
+    2. type (initial, final, interaction)
+  
+For every edges in the graph, it contains the following properties:
+    1. source
+    2. target
+    3. particle (id, spin, color, isAnti, isVirtual,...)
+
+## Stage 3: Layout algorithm:
+Use Sugiyama Framework to generate a layout for the given graph vectors. 
+### Layering:
+Find out the layers of the graph on $x$ axis (as we define from left to right is how time flows). Let the initial state particles on the Layer 0, final stage particles on the MaxLayer. If $u\to v$ then $Layer(v) \ge Layer(u) + 1$. 
+### Crossing Reduction:
+After finding out the layering on the $x$ axis, we need find out the ordering on the $y$ axis. Use Barycenter Heuristic to calculate optimal position relative to the previous layer. Continue the iteration till the local optimizer.
+### Coordinate Assignment:
+Map the layering and ordering to the actual $(x,y)$ coordinates on the canvas. For the Penguin Diagram, such as in the B meson decay, where weak interaction happened twice, system will recognize the loop structure and assign coordinates accordingly.
+### Drawing:
+Canvas will draw the particles according to their id, colour, isAnti, ... properties. For example, quarks are solid lines, gluons are curly lines, photons are wavy lines, etc. Finally, at the end stage system will call the validation engine to check the physics rules such as colour charge, lepton number, baryon number conservation at each vertex. If AI is generating wrong diagram, the system will capture and notify AI generate feature failed, then provide the error message to AI for next attempt. After such `for` loop of attempts (default 3 times), if still cannot get a valid diagram, the system will notify user to redraw manually.
