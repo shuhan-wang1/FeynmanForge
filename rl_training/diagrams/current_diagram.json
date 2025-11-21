@@ -1,0 +1,93 @@
+{
+  "timestamp": "2025-11-21T16:14:24.543975",
+  "metadata": {
+    "episode": 0,
+    "reward": 0.0,
+    "initial_state": [
+      "e",
+      "e"
+    ],
+    "final_state": [
+      "mu",
+      "mu"
+    ]
+  },
+  "shapes": [
+    {
+      "id": "initial_0",
+      "type": "fermion",
+      "p1": {
+        "x": 50,
+        "y": 200
+      },
+      "p2": {
+        "x": 150,
+        "y": 200
+      },
+      "props": {
+        "particleId": "e",
+        "isAnti": false,
+        "color": "none",
+        "category": "fermion",
+        "group": "initial"
+      }
+    },
+    {
+      "id": "initial_1",
+      "type": "fermion",
+      "p1": {
+        "x": 50,
+        "y": 300
+      },
+      "p2": {
+        "x": 150,
+        "y": 300
+      },
+      "props": {
+        "particleId": "e",
+        "isAnti": false,
+        "color": "none",
+        "category": "fermion",
+        "group": "initial"
+      }
+    },
+    {
+      "id": "final_0",
+      "type": "fermion",
+      "p1": {
+        "x": 650,
+        "y": 200
+      },
+      "p2": {
+        "x": 750,
+        "y": 200
+      },
+      "props": {
+        "particleId": "mu",
+        "isAnti": false,
+        "color": "none",
+        "category": "fermion",
+        "group": "final"
+      }
+    },
+    {
+      "id": "final_1",
+      "type": "fermion",
+      "p1": {
+        "x": 650,
+        "y": 300
+      },
+      "p2": {
+        "x": 750,
+        "y": 300
+      },
+      "props": {
+        "particleId": "mu",
+        "isAnti": false,
+        "color": "none",
+        "category": "fermion",
+        "group": "final"
+      }
+    }
+  ]
+}

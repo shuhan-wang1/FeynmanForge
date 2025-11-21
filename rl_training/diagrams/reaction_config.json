@@ -1,0 +1,21 @@
+{
+  "reaction": {
+    "initial": [
+      "e",
+      "e"
+    ],
+    "final": [
+      "mu",
+      "mu"
+    ],
+    "latex": "$e + e \\to mu + mu$"
+  },
+  "visualization": {
+    "canvas_width": 800,
+    "canvas_height": 600,
+    "initial_x": 80,
+    "final_x": 720,
+    "auto_refresh": true,
+    "refresh_interval": 2000
+  }
+}
