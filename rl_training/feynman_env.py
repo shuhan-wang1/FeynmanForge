@@ -174,11 +174,16 @@ class FeynmanDiagramEnv(gym.Env):
     def step(self, action: Dict) -> Tuple[Data, float, bool, bool, Dict]:
         if self.terminated:
             return self._get_observation(), 0.0, True, False, self._get_info()
-        
+
         self.step_count += 1
         reward = self.reward_weights['step_penalty']
         action_type = action['action_type']
-        
+
+        # DEBUG: Log actions for first 100 steps
+        if self.step_count <= 100:
+            action_names = ['CONNECT', 'BRANCH', 'SET_TYPE', 'TERMINATE', 'MERGE']
+            print(f"[ENV Step {self.step_count}] Action: {action_names[action_type]}, vertex_idx={action.get('vertex_idx', 'N/A')}, num_vertices={len(self.vertices)}")
+
         if action_type == self.ACTION_TERMINATE:
             self.terminated = True
             num_internal_edges = sum(1 for e in self.edges if not e['is_external'])
@@ -194,6 +199,8 @@ class FeynmanDiagramEnv(gym.Env):
             
         elif action_type == self.ACTION_CONNECT:
             success = self._execute_connect(action['vertex_idx'], action['target_vertex'])
+            if self.step_count <= 100:
+                print(f"  → CONNECT success={success}, reward_before={reward:.2f}")
             if success:
                 reward += self.reward_weights.get('successful_connection', 2.0)
                 step_reward = self._compute_step_reward(action['vertex_idx'])
@@ -205,6 +212,8 @@ class FeynmanDiagramEnv(gym.Env):
                 
         elif action_type == self.ACTION_BRANCH:
             success = self._execute_branch(action['vertex_idx'], action['particle_type'])
+            if self.step_count <= 100:
+                print(f"  → BRANCH success={success}, num_vertices_after={len(self.vertices)}")
             if success:
                 reward += self.reward_weights.get('vertex_created', 1.0)
                 step_reward = self._compute_step_reward(action['vertex_idx'])
@@ -240,6 +249,11 @@ class FeynmanDiagramEnv(gym.Env):
             self.last_progress = new_progress
 
         truncated = self.step_count >= self.max_steps
+
+        # DEBUG: Log final reward and termination
+        if self.step_count <= 100:
+            print(f"  → Final reward={reward:.2f}, terminated={self.terminated}, truncated={truncated}")
+
         return self._get_observation(), reward, self.terminated, truncated, self._get_info()
     
     def _execute_connect(self, vertex_idx: int, target_idx: int) -> bool:
