@@ -760,11 +760,11 @@ def main():
     num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
     
     model = FeynmanGCPN(
-        node_input_dim=6,
+        node_input_dim=9,  # Updated from 6 to 9
         edge_input_dim=21,
         hidden_dim=128,
         num_mp_layers=3,
-        num_action_types=4,
+        num_action_types=5,  # Updated from 4 to 5 for ACTION_MERGE
         num_particle_types=num_particle_types,
         max_vertices=10,
         lambda_penalty=5.0

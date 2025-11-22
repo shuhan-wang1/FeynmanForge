@@ -68,8 +68,8 @@ class FeynmanMPNN(nn.Module):
     """
     
     def __init__(
-        self, 
-        node_input_dim: int = 6,      # [type(3), x, y, num_conn]
+        self,
+        node_input_dim: int = 9,      # [type(3), x, y, num_conn, q_net, l_net, b_net]
         edge_input_dim: int = 21,     # Particle encoding from ParticleEncoder
         hidden_dim: int = 128,
         num_layers: int = 3
@@ -232,7 +232,7 @@ class PhysicsGatedPolicyHead(nn.Module):
     def __init__(
         self,
         embedding_dim: int,
-        num_action_types: int = 4,
+        num_action_types: int = 5,  # Updated from 4 to 5 for ACTION_MERGE
         num_particle_types: int = 20,
         max_vertices: int = 10,
         lambda_penalty: float = 5.0
@@ -273,37 +273,43 @@ class PhysicsGatedPolicyHead(nn.Module):
         self,
         graph_embedding: torch.Tensor,
         vertex_states: Optional[List[Dict]] = None,
-        mask_invalid: bool = True
+        mask_invalid: bool = False  # Disabled for now - needs proper target vertex indexing
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with physics gating
-        
+
         Args:
             graph_embedding: [batch_size, embedding_dim] or [embedding_dim]
             vertex_states: List of vertex quantum number states (for gate computation)
-            mask_invalid: Whether to apply physics gate
-            
+            mask_invalid: Whether to apply physics gate (currently disabled)
+
         Returns:
             Dictionary with action logits and probabilities
+
+        Note:
+            Physics gate is disabled pending proper implementation of target vertex
+            tracking. The gate needs to know WHICH vertex the action will affect,
+            not just use vertex_states[0] which is always the first initial particle.
         """
         # Raw neural network outputs
         action_type_logits = self.action_type_head(graph_embedding)
         vertex_logits = self.vertex_head(graph_embedding)
         particle_logits = self.particle_head(graph_embedding)
-        
-        # Disabled physics masking - was using incorrect vertex assumption
-        # if mask_invalid and vertex_states is not None:
+
+        # Physics gate currently disabled - would need proper target vertex indexing
+        # Future improvement: Pass target_vertex_idx to apply_physics_mask
+        # if mask_invalid and vertex_states is not None and target_vertex_idx is not None:
         #     particle_logits = self.apply_physics_mask(
-        #         particle_logits, 
-        #         vertex_states, 
+        #         particle_logits,
+        #         vertex_states[target_vertex_idx],
         #         self.particle_list
         #     )
-        
+
         # Softmax to get probabilities
         action_type_probs = F.softmax(action_type_logits, dim=-1)
         vertex_probs = F.softmax(vertex_logits, dim=-1)
         particle_probs = F.softmax(particle_logits, dim=-1)
-        
+
         return {
             'action_type_logits': action_type_logits,
             'action_type_probs': action_type_probs,
@@ -370,11 +376,11 @@ class FeynmanGCPN(nn.Module):
     
     def __init__(
         self,
-        node_input_dim: int = 6,
+        node_input_dim: int = 9,  # Updated from 6 to 9 to match actual node features
         edge_input_dim: int = 21,
         hidden_dim: int = 128,
         num_mp_layers: int = 3,
-        num_action_types: int = 4,
+        num_action_types: int = 5,  # Updated from 4 to 5 for ACTION_MERGE
         num_particle_types: int = 20,
         max_vertices: int = 10,
         lambda_penalty: float = 5.0

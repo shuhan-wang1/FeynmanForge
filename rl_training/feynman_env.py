@@ -35,6 +35,7 @@ class FeynmanDiagramEnv(gym.Env):
     ACTION_BRANCH = 1
     ACTION_SET_TYPE = 2
     ACTION_TERMINATE = 3
+    ACTION_MERGE = 4  # NEW: Merge two vertices for annihilation topology
     
     def __init__(
         self, 
@@ -75,7 +76,7 @@ class FeynmanDiagramEnv(gym.Env):
         self.num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
         
         self.action_space = spaces.Dict({
-            'action_type': spaces.Discrete(4),
+            'action_type': spaces.Discrete(5),  # Updated from 4 to 5 for ACTION_MERGE
             'vertex_idx': spaces.Discrete(max_vertices),
             'particle_type': spaces.Discrete(self.num_particle_types),
             'target_vertex': spaces.Discrete(max_vertices)
@@ -208,7 +209,18 @@ class FeynmanDiagramEnv(gym.Env):
             success = self._execute_set_type(action['vertex_idx'], action['particle_type'])
             if not success:
                 reward += self.reward_weights.get('invalid_action', -0.5)
-        
+
+        elif action_type == self.ACTION_MERGE:
+            success = self._execute_merge(action['vertex_idx'], action['target_vertex'], action['particle_type'])
+            if success:
+                reward += self.reward_weights.get('vertex_created', 1.0)
+                step_reward = self._compute_step_reward(len(self.vertices) - 1)  # New vertex is last
+                reward += step_reward
+                if step_reward >= 0:
+                    reward += self.reward_weights.get('conservation_bonus', 0.5)
+            else:
+                reward += self.reward_weights.get('invalid_action', -0.5)
+
         truncated = self.step_count >= self.max_steps
         return self._get_observation(), reward, self.terminated, truncated, self._get_info()
     
@@ -262,10 +274,17 @@ class FeynmanDiagramEnv(gym.Env):
             edge2['state'] = 'connected'
             return True
             
-        # Case B: One External, One Interaction -> Merge external line into port
-        # We cannot connect two external vertices directly (unless we want a free line, skipping for now)
+        # Case B: Two external vertices -> Allow if both are same type (both initial or both final)
+        # This enables pair annihilation or final state merging scenarios
         if v1_is_ext and v2_is_ext:
+            # Only allow if both are initial OR both are final (not mixed)
+            if v1['type'] != v2['type']:
+                return False
+            # If both are initial, they can converge - delegate to merge operation
+            # For now, we'll use ACTION_MERGE for this, so return False here
             return False
+
+        # Case C: One External, One Interaction -> Merge external line into port
             
         # Identify which is external and which is interaction
         if v1_is_ext:
@@ -368,11 +387,106 @@ class FeynmanDiagramEnv(gym.Env):
     def _execute_set_type(self, edge_idx: int, particle_type_idx: int) -> bool:
         if edge_idx >= len(self.edges): return False
         if particle_type_idx >= len(self.particle_list): return False
-        
+
         # Only allow changing type of internal edges
         if self.edges[edge_idx]['is_external']: return False
-        
+
         self.edges[edge_idx]['particle_id'] = self.particle_list[particle_type_idx]
+        return True
+
+    def _execute_merge(self, vertex_idx1: int, vertex_idx2: int, particle_type_idx: int) -> bool:
+        """
+        Merge two vertices into a new interaction vertex.
+        This is the KEY operation for annihilation topology: e⁺ + e⁻ → [vertex] → γ
+
+        Args:
+            vertex_idx1: First vertex to merge
+            vertex_idx2: Second vertex to merge
+            particle_type_idx: Type of particle to emit from the new vertex
+
+        Returns:
+            True if merge was successful, False otherwise
+        """
+        # Validation checks
+        if vertex_idx1 >= len(self.vertices) or vertex_idx2 >= len(self.vertices):
+            return False
+        if vertex_idx1 == vertex_idx2:
+            return False
+        if len(self.vertices) >= self.max_vertices:
+            return False
+        if particle_type_idx >= len(self.particle_list):
+            return False
+
+        v1 = self.vertices[vertex_idx1]
+        v2 = self.vertices[vertex_idx2]
+
+        # Get open half-lines from both vertices
+        v1_open = self._get_open_halflines(vertex_idx1)
+        v2_open = self._get_open_halflines(vertex_idx2)
+
+        if not v1_open or not v2_open:
+            return False
+
+        # Get the edges to merge
+        edge1_idx = v1_open[0]
+        edge2_idx = v2_open[0]
+        edge1 = self.edges[edge1_idx]
+        edge2 = self.edges[edge2_idx]
+
+        # Calculate position for new interaction vertex (midpoint)
+        new_x = (v1['x'] + v2['x']) / 2
+        new_y = (v1['y'] + v2['y']) / 2
+
+        # Create new interaction vertex
+        new_vertex = {
+            'id': len(self.vertices),
+            'type': 'interaction',
+            'x': new_x,
+            'y': new_y,
+            'connected_edges': []
+        }
+        new_vertex_id = new_vertex['id']
+        self.vertices.append(new_vertex)
+
+        # Connect edge1 to new vertex
+        # If edge1 has source=None, it's an incoming line, set source to new vertex
+        # If edge1 has target=None, it's an outgoing line, set target to new vertex
+        if edge1['target'] is None:
+            edge1['target'] = new_vertex_id
+        elif edge1['source'] is None:
+            edge1['source'] = new_vertex_id
+        else:
+            # Edge is already connected on both ends, this shouldn't happen for open lines
+            return False
+        edge1['state'] = 'connected'
+        new_vertex['connected_edges'].append(edge1_idx)
+
+        # Connect edge2 to new vertex
+        if edge2['target'] is None:
+            edge2['target'] = new_vertex_id
+        elif edge2['source'] is None:
+            edge2['source'] = new_vertex_id
+        else:
+            # Edge is already connected on both ends
+            return False
+        edge2['state'] = 'connected'
+        new_vertex['connected_edges'].append(edge2_idx)
+
+        # Create outgoing propagator (the particle emitted from annihilation)
+        emitted_pid = self.particle_list[particle_type_idx]
+        new_edge = {
+            'id': len(self.edges),
+            'source': new_vertex_id,
+            'target': None,
+            'particle_id': emitted_pid,
+            'is_anti': False,
+            'color': None,
+            'is_external': False,
+            'state': 'open'
+        }
+        self.edges.append(new_edge)
+        new_vertex['connected_edges'].append(new_edge['id'])
+
         return True
     
     def _get_open_halflines(self, vertex_idx: int) -> List[int]:
