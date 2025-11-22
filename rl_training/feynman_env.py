@@ -586,8 +586,9 @@ class FeynmanDiagramEnv(gym.Env):
         else:
             reward -= 5.0
             
-        num_interaction_vertices = sum(1 for v in self.vertices if v['type'] == 'interaction')
-        reward += self.reward_weights['complexity_penalty'] * num_interaction_vertices
+        # REMOVED: Complexity penalty was discouraging model from building ANY topology!
+        # num_interaction_vertices = sum(1 for v in self.vertices if v['type'] == 'interaction')
+        # reward += self.reward_weights['complexity_penalty'] * num_interaction_vertices
         
         return reward
 
