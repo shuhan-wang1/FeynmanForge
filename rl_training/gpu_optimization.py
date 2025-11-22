@@ -50,28 +50,35 @@ def configure_gpu_optimization(device_id=0):
 # ========================================
 
 OPTIMIZED_CONFIG = {
+    # UPDATED 2025: Optimized for RTX 3060 (6GB VRAM) and 12th Gen i7
     # Increase batch size for better GPU utilization
-    'batch_size': 256,  # 从128增加到256
-    
+    'batch_size': 2048,  # Increased from 256 to 2048 for maximum GPU throughput
+
     # Larger rollout buffer = more data per update
-    'rollout_steps': 8192,  # 从4096增加到8192
-    
-    # Reduce PPO epochs if memory is tight
-    'epochs_per_update': 6,  # 从4增加到6，更多GPU计算
-    
+    'rollout_steps': 1024,  # Optimized for parallel environments
+
+    # More PPO epochs for better learning
+    'epochs_per_update': 6,  # Increased from 4 to 6 for better convergence
+
     # Model size - larger models utilize GPU better
-    'hidden_dim': 384,  # 从256增加到384
-    'num_mp_layers': 5,  # 从4增加到5
-    
+    'hidden_dim': 768,  # Increased from 384 to 768 for better capacity
+    'num_mp_layers': 8,  # Increased from 5 to 8 for deeper representations
+
+    # Parallel environments for CPU utilization
+    'num_parallel_envs': 512,  # Increased from 256 to 512 for multi-core CPUs
+
     # Learning rate
-    'learning_rate': 2e-4,  # 略微降低平衡更大模型
-    
-    # Mixed precision training (if supported)
-    'use_amp': True,  # Automatic Mixed Precision
-    
+    'learning_rate': 2e-4,  # Balanced for larger model
+
+    # Mixed precision training (FP16 for faster computation)
+    'use_amp': True,  # Automatic Mixed Precision - ENABLED
+
+    # Batched graph processing (NEW)
+    'use_batched_graphs': True,  # Use PyG Batch for parallel GPU processing
+
     # Gradient accumulation (if batch size limited by memory)
     'gradient_accumulation_steps': 1,
-    
+
     # DataLoader settings
     'num_workers': 0,  # Set to 0 for RL (no pre-loading needed)
     'pin_memory': True,  # Faster host-to-device transfer

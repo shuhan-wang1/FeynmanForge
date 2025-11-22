@@ -96,9 +96,10 @@ def main():
     print("\n📦 Setting up environment...")
     
     # 使用并行环境充分利用 CPU 多核
-    num_parallel_envs = 128 * 2 # 8个并行环境（根据CPU核心数调整）
+    # OPTIMIZED: Increased from 256 to 512 for better CPU utilization
+    num_parallel_envs = 512 if device.type == 'cuda' else 128
     print(f"   Creating {num_parallel_envs} parallel environments...")
-    
+
     # 创建并行环境包装器
     env = make_parallel_envs(
         num_envs=num_parallel_envs,
@@ -108,7 +109,7 @@ def main():
         max_steps=50
     )
     print(f"   ✅ {num_parallel_envs} parallel environments created")
-    
+
     # 创建一个单独的环境用于可视化
     vis_env = FeynmanDiagramEnv(
         initial_state=initial_state,
@@ -116,10 +117,12 @@ def main():
         max_vertices=10,
         max_steps=50
     )
-    
+
     # Determine model size based on device
-    hidden_dim = 384 if device.type == 'cuda' else args.hidden_dim
-    num_mp_layers = 5 if device.type == 'cuda' else 3
+    # OPTIMIZED: Increased hidden_dim from 384 to 768 for better GPU utilization
+    # Increased MP layers from 5 to 8 for more model capacity
+    hidden_dim = 768 if device.type == 'cuda' else args.hidden_dim
+    num_mp_layers = 8 if device.type == 'cuda' else 3
     
     # Create model
     print("🧠 Building neural network...")
@@ -145,12 +148,14 @@ def main():
     
     # Create trainer
     print("⚙️  Configuring PPO trainer...")
-    
+
     # Use optimized batch size for GPU and parallel envs
+    # OPTIMIZED: Increased batch size from 512 to 2048 for better GPU utilization
     # batch_size 应该是 num_parallel_envs 的倍数
-    batch_size = num_parallel_envs * 2 if device.type == 'cuda' else 128
-    rollout_steps = 512 if device.type == 'cuda' else 256  # 每个环境的步数
-    
+    batch_size = 2048 if device.type == 'cuda' else 128
+    # OPTIMIZED: Increased rollout_steps from 512 to 1024 for more data per update
+    rollout_steps = 1024 if device.type == 'cuda' else 256  # 每个环境的步数
+
     trainer = PPOTrainer(
         env=env,
         model=model,
@@ -162,8 +167,9 @@ def main():
         value_coef=0.5,
         entropy_coef=0.05,  # 从 0.01 提高到 0.05，强制探索
         batch_size=batch_size,
-        epochs_per_update=4,  # 降低以加速迭代
-        num_envs=num_parallel_envs
+        epochs_per_update=6,  # OPTIMIZED: Increased from 4 to 6 for better learning
+        num_envs=num_parallel_envs,
+        use_amp=True  # Enable mixed precision training
     )
     
     # Create reaction config for visualization
