@@ -557,15 +557,43 @@ class FeynmanDiagramEnv(gym.Env):
         return open_lines
     
     def _compute_step_reward(self, vertex_idx: int) -> float:
+        """
+        Compute physics-based reward for a vertex.
+
+        CRITICAL FIX: Only validate COMPLETE vertices!
+        A vertex is complete when all its halflines are connected (no open edges).
+        Incomplete vertices should NOT be penalized - they're under construction!
+
+        Example:
+        - Step 1: BRANCH creates vertex with 1 incoming, 1 open outgoing → DON'T validate
+        - Step 2: CONNECT closes the open line → NOW validate
+
+        This prevents punishing the model for intermediate states during construction.
+        """
         vertex = self.vertices[vertex_idx]
         # Filter out consumed edges
         connected_edges = [self.edges[eid] for eid in vertex['connected_edges'] if self.edges[eid]['state'] != 'consumed']
-        
+
+        # CRITICAL: Only validate COMPLETE vertices (no open halflines)
+        open_halflines = [e for e in connected_edges if e['state'] == 'open']
+        if len(open_halflines) > 0:
+            # Vertex still under construction, don't validate yet
+            # Return 0 (no reward, no penalty) until vertex is complete
+            return 0.0
+
+        # ADDITIONAL: Require minimum number of edges for a valid vertex
+        # A physics vertex needs at least 2 edges (e.g., decay: 1 in, 1 out is minimum)
+        # More typically 3+ (e.g., QED vertex: e- in, e- out, photon out)
+        if len(connected_edges) < 2:
+            # Not enough edges for a valid interaction vertex
+            return 0.0
+
+        # Vertex is COMPLETE - now validate physics!
         incoming = [e for e in connected_edges if e['target'] == vertex_idx]
         outgoing = [e for e in connected_edges if e['source'] == vertex_idx]
-        
+
         reward = 0.0
-        
+
         q_in = [self._get_charge(e) for e in incoming]
         q_out = [self._get_charge(e) for e in outgoing]
         l_in = [self._get_lepton(e) for e in incoming]
@@ -574,24 +602,24 @@ class FeynmanDiagramEnv(gym.Env):
         b_out = [self._get_baryon(e) for e in outgoing]
         colors_in = [e['color'] for e in incoming]
         colors_out = [e['color'] for e in outgoing]
-        
+
         charge_ok, charge_mismatch = ConservationLaws.check_charge_conservation(q_in, q_out)
         lepton_ok, lepton_mismatch = ConservationLaws.check_lepton_conservation(l_in, l_out)
         baryon_ok, baryon_mismatch = ConservationLaws.check_baryon_conservation(b_in, b_out)
         color_ok, color_mismatch = ConservationLaws.check_color_conservation(colors_in, colors_out)
-        
+
         if not charge_ok: reward += self.reward_weights['charge_violation'] * charge_mismatch
         if not lepton_ok: reward += self.reward_weights['lepton_violation'] * lepton_mismatch
         if not baryon_ok: reward += self.reward_weights['baryon_violation'] * baryon_mismatch
         if not color_ok: reward += self.reward_weights['color_violation'] * color_mismatch
-        
+
         particle_ids = [e['particle_id'] for e in connected_edges]
         rules_ok, violations = ConservationLaws.check_interaction_rules(particle_ids)
         if not rules_ok: reward += self.reward_weights['interaction_violation'] * len(violations)
-        
+
         if charge_ok and lepton_ok and baryon_ok and color_ok and rules_ok:
             reward += 2.0
-            
+
         return reward
     
     def _compute_terminal_reward(self) -> float:
