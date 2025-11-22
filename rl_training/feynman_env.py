@@ -581,11 +581,14 @@ class FeynmanDiagramEnv(gym.Env):
             # Return 0 (no reward, no penalty) until vertex is complete
             return 0.0
 
-        # ADDITIONAL: Require minimum number of edges for a valid vertex
-        # A physics vertex needs at least 2 edges (e.g., decay: 1 in, 1 out is minimum)
-        # More typically 3+ (e.g., QED vertex: e- in, e- out, photon out)
-        if len(connected_edges) < 2:
-            # Not enough edges for a valid interaction vertex
+        # CRITICAL: A physics vertex MUST have at least 3 particles
+        # Examples:
+        #   - QED vertex: e- in, e- out, photon out (3 particles)
+        #   - Annihilation: e+ in, e- in, photon out (3 particles)
+        #   - Weak decay: mu- in, e- out, neutrinos out (3+ particles)
+        # 2 particles (1 in, 1 out) is just propagation, NOT an interaction!
+        if len(connected_edges) < 3:
+            # Not enough particles for a valid interaction vertex
             return 0.0
 
         # Vertex is COMPLETE - now validate physics!
