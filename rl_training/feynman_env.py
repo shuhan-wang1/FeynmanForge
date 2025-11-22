@@ -383,7 +383,13 @@ class FeynmanDiagramEnv(gym.Env):
         """Create a new interaction vertex by branching (3-way vertex)"""
         if vertex_idx >= len(self.vertices): return False
         if len(self.vertices) >= self.max_vertices: return False
-        
+
+        # CRITICAL: Cannot branch from initial/final state vertices!
+        # Initial and final particles are FIXED - model cannot modify them
+        vertex = self.vertices[vertex_idx]
+        if vertex['type'] in ['initial', 'final']:
+            return False  # Only interaction vertices can branch
+
         open_lines = self._get_open_halflines(vertex_idx)
         if not open_lines: return False
         
@@ -478,6 +484,13 @@ class FeynmanDiagramEnv(gym.Env):
 
         v1 = self.vertices[vertex_idx1]
         v2 = self.vertices[vertex_idx2]
+
+        # CRITICAL: Initial/final vertices can CONNECT but cannot be MODIFIED
+        # They can participate in merges (to create interaction vertices)
+        # but their external particles must remain unchanged
+        # For now, we allow merging initial/final vertices since that's how
+        # we build annihilation topologies (e+ + e- meet at interaction point)
+        # But we need to ensure external particles are preserved
 
         # Get open half-lines from both vertices
         v1_open = self._get_open_halflines(vertex_idx1)
