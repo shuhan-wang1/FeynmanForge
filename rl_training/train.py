@@ -122,16 +122,36 @@ def main():
         max_steps=50
     )
 
-    # Determine model size based on device
-    # OPTIMIZED: Increased hidden_dim from 384 to 768 for better GPU utilization
-    # Increased MP layers from 5 to 8 for more model capacity
-    hidden_dim = 768 if device.type == 'cuda' else args.hidden_dim
-    num_mp_layers = 8 if device.type == 'cuda' else 3
-    
+    # If using pretrained model, detect its architecture first
+    if args.pretrained:
+        import torch as torch_load
+        print(f"\n📦 Loading pretrained model architecture from {args.pretrained}...")
+        checkpoint = torch_load.load(args.pretrained, map_location=device)
+
+        # Detect architecture from pretrained weights
+        # Check node_encoder shape to determine hidden_dim
+        node_encoder_shape = checkpoint['model_state_dict']['encoder.node_encoder.weight'].shape
+        hidden_dim = node_encoder_shape[0]  # First dimension is hidden_dim
+
+        # Count MP layers by checking how many mp_layers.X exist
+        num_mp_layers = 0
+        for key in checkpoint['model_state_dict'].keys():
+            if key.startswith('encoder.mp_layers.'):
+                layer_idx = int(key.split('.')[2])
+                num_mp_layers = max(num_mp_layers, layer_idx + 1)
+
+        print(f"   Detected architecture: hidden_dim={hidden_dim}, num_mp_layers={num_mp_layers}")
+    else:
+        # Determine model size based on device
+        # OPTIMIZED: Increased hidden_dim from 384 to 768 for better GPU utilization
+        # Increased MP layers from 5 to 8 for more model capacity
+        hidden_dim = 768 if device.type == 'cuda' else args.hidden_dim
+        num_mp_layers = 8 if device.type == 'cuda' else 3
+
     # Create model
     print("🧠 Building neural network...")
     num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
-    
+
     model = FeynmanGCPN(
         node_input_dim=9,
         edge_input_dim=21,
@@ -145,9 +165,7 @@ def main():
 
     # Load pretrained weights if specified
     if args.pretrained:
-        import torch as torch_load
-        print(f"\n📦 Loading pretrained weights from {args.pretrained}...")
-        checkpoint = torch_load.load(args.pretrained, map_location=device)
+        print(f"   Loading pretrained weights...")
         model.load_state_dict(checkpoint['model_state_dict'])
         print(f"   ✅ Loaded pretrained model!")
         if 'accuracy' in checkpoint:
