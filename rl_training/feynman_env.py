@@ -472,14 +472,26 @@ class FeynmanDiagramEnv(gym.Env):
         Returns:
             True if merge was successful, False otherwise
         """
+        # DEBUG: Log MERGE attempt details (only first 10 steps to reduce spam)
+        if self.step_count <= 10:
+            print(f"[MERGE DEBUG] Attempting: V{vertex_idx1} + V{vertex_idx2} → particle_type={particle_type_idx}")
+
         # Validation checks
         if vertex_idx1 >= len(self.vertices) or vertex_idx2 >= len(self.vertices):
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: Invalid vertex index (max={len(self.vertices)-1})")
             return False
         if vertex_idx1 == vertex_idx2:
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: Cannot merge vertex with itself!")
             return False
         if len(self.vertices) >= self.max_vertices:
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: Max vertices reached ({self.max_vertices})")
             return False
         if particle_type_idx >= len(self.particle_list):
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: Invalid particle type (max={len(self.particle_list)-1})")
             return False
 
         v1 = self.vertices[vertex_idx1]
@@ -496,7 +508,13 @@ class FeynmanDiagramEnv(gym.Env):
         v1_open = self._get_open_halflines(vertex_idx1)
         v2_open = self._get_open_halflines(vertex_idx2)
 
+        if self.step_count <= 10:
+            print(f"  V{vertex_idx1} type={v1['type']}, open_edges={len(v1_open)}")
+            print(f"  V{vertex_idx2} type={v2['type']}, open_edges={len(v2_open)}")
+
         if not v1_open or not v2_open:
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: One or both vertices have no open halflines!")
             return False
 
         # Get the edges to merge
@@ -558,6 +576,10 @@ class FeynmanDiagramEnv(gym.Env):
         }
         self.edges.append(new_edge)
         new_vertex['connected_edges'].append(new_edge['id'])
+
+        # DEBUG: Log success
+        if self.step_count <= 10:
+            print(f"  ✓ SUCCESS: Created V{new_vertex_id} with {len(new_vertex['connected_edges'])} edges")
 
         return True
     
