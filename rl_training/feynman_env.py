@@ -56,21 +56,24 @@ class FeynmanDiagramEnv(gym.Env):
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        # Reward weights
+        # Reward weights - OPTIMIZED for better exploration
         self.reward_weights = reward_weights or {
             'charge_violation': -0.5,
             'lepton_violation': -0.5,
             'baryon_violation': -0.5,
             'color_violation': -1.0,
             'interaction_violation': -0.5,
-            'target_match': 20.0,
-            'topology_valid': 10.0,
-            'successful_connection': 2.0,
-            'vertex_created': 1.0,
-            'conservation_bonus': 2.0,
+            'target_match': 50.0,              # INCREASED from 20.0 - major success!
+            'topology_valid': 20.0,            # INCREASED from 10.0
+            'successful_connection': 5.0,      # INCREASED from 2.0 - encourage connections
+            'vertex_created': 3.0,             # INCREASED from 1.0 - encourage building
+            'conservation_bonus': 5.0,         # INCREASED from 2.0 - reward physics correctness
             'complexity_penalty': -0.1,
-            'step_penalty': 0.0,
-            'invalid_action': -0.5,
+            'step_penalty': -0.02,             # CHANGED from 0.0 - tiny penalty to prefer efficiency
+            'invalid_action': -0.2,            # REDUCED from -0.5 - less harsh on exploration
+            'progress_reward': 2.0,            # NEW - reward incremental progress
+            'exploration_bonus': 0.5,          # NEW - reward trying new things
+            'early_termination_penalty': -50.0, # NEW - much harsher than exploring
         }
         
         self.num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
@@ -92,6 +95,7 @@ class FeynmanDiagramEnv(gym.Env):
         self.edges = []
         self.step_count = 0
         self.terminated = False
+        self.last_progress = 0.0  # Track progress for incremental rewards
         
         all_particles = [p.id for p in PhysicsConstants.get_all_particles()]
         all_bosons = list(PhysicsConstants.BOSONS.keys())
@@ -100,11 +104,12 @@ class FeynmanDiagramEnv(gym.Env):
         
     def reset(self, seed=None, options=None) -> Tuple[Data, Dict]:
         super().reset(seed=seed)
-        
+
         self.step_count = 0
         self.terminated = False
         self.vertices = []
         self.edges = []
+        self.last_progress = 0.0  # Reset progress tracking
         
         initial_x = 80
         y_spacing = self.canvas_height / (len(self.initial_particles) + 1)
@@ -178,8 +183,12 @@ class FeynmanDiagramEnv(gym.Env):
             self.terminated = True
             num_internal_edges = sum(1 for e in self.edges if not e['is_external'])
             is_connected = self._is_graph_connected()
-            if num_internal_edges < 1 or not is_connected:
-                reward -= 20.0  # Penalize lazy termination
+
+            # HARSH penalty for terminating too early (before making real progress)
+            if self.step_count < 3:
+                reward += self.reward_weights['early_termination_penalty']
+            elif num_internal_edges < 1 or not is_connected:
+                reward -= 40.0  # INCREASED from 20.0 - penalize lazy termination
             else:
                 reward += self._compute_terminal_reward()
             
@@ -220,6 +229,15 @@ class FeynmanDiagramEnv(gym.Env):
                     reward += self.reward_weights.get('conservation_bonus', 0.5)
             else:
                 reward += self.reward_weights.get('invalid_action', -0.5)
+
+        # Add progress-based reward for incremental improvement
+        if not self.terminated:
+            new_progress = self._compute_progress_score()
+            progress_delta = new_progress - self.last_progress
+            if progress_delta > 0:
+                reward += progress_delta * self.reward_weights['progress_reward']
+                reward += self.reward_weights['exploration_bonus']  # Bonus for making progress
+            self.last_progress = new_progress
 
         truncated = self.step_count >= self.max_steps
         return self._get_observation(), reward, self.terminated, truncated, self._get_info()
@@ -558,7 +576,36 @@ class FeynmanDiagramEnv(gym.Env):
         reward += self.reward_weights['complexity_penalty'] * num_interaction_vertices
         
         return reward
-    
+
+    def _compute_progress_score(self) -> float:
+        """
+        Compute a progress score (0-1) indicating how close the diagram is to completion.
+        Used for incremental reward shaping.
+        """
+        score = 0.0
+
+        # Component 1: Internal structure (max 30 points)
+        num_internal = sum(1 for e in self.edges if not e['is_external'])
+        score += min(num_internal * 5.0, 30.0)
+
+        # Component 2: Connectivity (20 points)
+        if len(self.vertices) > 0 and self._is_graph_connected():
+            score += 20.0
+
+        # Component 3: External particle connections (30 points)
+        connected_external = sum(1 for e in self.edges
+                                if e['is_external'] and e['state'] == 'connected')
+        total_external = len(self.initial_particles) + len(self.final_particles)
+        if total_external > 0:
+            score += (connected_external / total_external) * 30.0
+
+        # Component 4: Interaction vertices created (20 points)
+        num_interaction = sum(1 for v in self.vertices if v['type'] == 'interaction')
+        score += min(num_interaction * 10.0, 20.0)
+
+        # Normalize to 0-1 range
+        return score / 100.0
+
     def _check_external_match(self, target_particles: List[str], vertex_type: str) -> bool:
         external_vertices = [v for v in self.vertices if v['type'] == vertex_type]
         if len(external_vertices) != len(target_particles): return False

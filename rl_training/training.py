@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 import numpy as np
 from typing import Dict, List, Tuple, Optional
 import json
@@ -272,7 +272,7 @@ class PPOTrainer:
                     batched_state = Batch.from_data_list(states).to(self.device, non_blocking=True)
 
                     # Process entire batch at once (MAJOR SPEEDUP)
-                    with autocast(enabled=self.use_amp):
+                    with autocast('cuda', enabled=self.use_amp):
                         outputs = self._process_batched_states(batched_state, vertex_states_batch)
 
                     # Unbatch results
@@ -545,7 +545,7 @@ class PPOTrainer:
                 batch_entropies = torch.zeros(batch_size_actual, device=self.device)
 
                 # Use mixed precision for forward pass
-                with autocast(enabled=self.use_amp):
+                with autocast('cuda', enabled=self.use_amp):
                     for i, (state, action, vertex_state) in enumerate(zip(batch_states, batch_actions, batch_vertex_states)):
                         action_tensor = {k: torch.tensor(v, device=self.device) for k, v in action.items()}
                         log_prob, value, entropy = self.model.evaluate_actions(state, action_tensor, vertex_state)

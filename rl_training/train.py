@@ -165,7 +165,7 @@ def main():
         gae_lambda=0.95,
         clip_epsilon=0.2,
         value_coef=0.5,
-        entropy_coef=0.05,  # 从 0.01 提高到 0.05，强制探索
+        entropy_coef=0.3,  # INCREASED from 0.05 to 0.3 - critical for large action space exploration
         batch_size=batch_size,
         epochs_per_update=6,  # OPTIMIZED: Increased from 4 to 6 for better learning
         num_envs=num_parallel_envs,
