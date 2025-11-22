@@ -273,7 +273,8 @@ class PhysicsGatedPolicyHead(nn.Module):
         self,
         graph_embedding: torch.Tensor,
         vertex_states: Optional[List[Dict]] = None,
-        mask_invalid: bool = False  # Disabled for now - needs proper target vertex indexing
+        mask_invalid: bool = False,  # Disabled for now - needs proper target vertex indexing
+        num_vertices: Optional[int] = None  # NEW: Actual number of vertices in graph
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with physics gating
@@ -282,6 +283,7 @@ class PhysicsGatedPolicyHead(nn.Module):
             graph_embedding: [batch_size, embedding_dim] or [embedding_dim]
             vertex_states: List of vertex quantum number states (for gate computation)
             mask_invalid: Whether to apply physics gate (currently disabled)
+            num_vertices: Actual number of vertices in the graph (for masking invalid indices)
 
         Returns:
             Dictionary with action logits and probabilities
@@ -296,6 +298,15 @@ class PhysicsGatedPolicyHead(nn.Module):
         vertex_logits = self.vertex_head(graph_embedding)
         particle_logits = self.particle_head(graph_embedding)
 
+        # CRITICAL FIX: Mask invalid vertex indices
+        # vertex_head outputs max_vertices (10) logits, but graph may have fewer vertices
+        # Without masking, 60% of sampled indices are out of bounds -> actions fail!
+        if num_vertices is not None and num_vertices < self.max_vertices:
+            # Create mask: valid indices (0 to num_vertices-1) = 0, invalid = -inf
+            mask = torch.zeros_like(vertex_logits)
+            mask[..., num_vertices:] = float('-inf')
+            vertex_logits = vertex_logits + mask
+
         # Physics gate currently disabled - would need proper target vertex indexing
         # Future improvement: Pass target_vertex_idx to apply_physics_mask
         # if mask_invalid and vertex_states is not None and target_vertex_idx is not None:
@@ -307,7 +318,7 @@ class PhysicsGatedPolicyHead(nn.Module):
 
         # Softmax to get probabilities
         action_type_probs = F.softmax(action_type_logits, dim=-1)
-        vertex_probs = F.softmax(vertex_logits, dim=-1)
+        vertex_probs = F.softmax(vertex_logits, dim=-1)  # Now only valid vertices have non-zero prob
         particle_probs = F.softmax(particle_logits, dim=-1)
 
         return {
@@ -412,32 +423,39 @@ class FeynmanGCPN(nn.Module):
     ) -> Dict[str, torch.Tensor]:
         """
         Full forward pass
-        
+
         Args:
             data: PyG Data object
             vertex_states: Quantum number states for physics gating
             return_value: Whether to compute value estimate
-            
+
         Returns:
             Dictionary with policy outputs and optionally value
         """
         # Encode graph
         node_embeddings, graph_embedding = self.encoder(data)
-        
-        # Policy
-        policy_output = self.policy_head(graph_embedding, vertex_states)
-        
+
+        # CRITICAL FIX: Extract actual number of vertices from graph
+        num_vertices = data.x.shape[0] if not hasattr(data, 'batch') else None
+
+        # Policy (with vertex masking)
+        policy_output = self.policy_head(
+            graph_embedding,
+            vertex_states,
+            num_vertices=num_vertices
+        )
+
         output = {
             'node_embeddings': node_embeddings,
             'graph_embedding': graph_embedding,
             **policy_output
         }
-        
+
         # Value
         if return_value:
             value = self.value_head(graph_embedding)
             output['value'] = value
-        
+
         return output
     
     def get_action(

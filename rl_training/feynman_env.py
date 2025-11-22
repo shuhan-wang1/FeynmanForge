@@ -723,33 +723,16 @@ class FeynmanDiagramEnv(gym.Env):
                         edge['particle_id'], edge['is_anti'], edge['color']
                     ))
 
-        # ADDITIONAL FIX: Add fully-connected edges between external vertices
-        # This allows MPNN to propagate information between initial and final particles
-        # Critical for learning which particles should connect
-        if len(self.vertices) > 1:
-            for i in range(len(self.vertices)):
-                for j in range(len(self.vertices)):
-                    if i != j:
-                        # Check if not already connected
-                        already_connected = any(
-                            (edge_index[k][0] == i and edge_index[k][1] == j)
-                            for k in range(len(edge_index))
-                        )
-                        if not already_connected:
-                            edge_index.append([i, j])
-                            # Use zero features for virtual edges (model will learn to ignore)
-                            edge_features.append(np.zeros(21, dtype=np.float32))
-
         x = torch.tensor(np.array(node_features, dtype=np.float32), dtype=torch.float32)
         if len(edge_index) > 0:
             edge_index_tensor = torch.tensor(np.array(edge_index, dtype=np.int64), dtype=torch.long).t().contiguous()
             edge_attr = torch.from_numpy(np.stack(edge_features)).float()
         else:
-            # Fallback: At minimum, add self-loops to all vertices
+            # Fallback: At minimum, add self-loops to all vertices with dummy features
             edge_index_list = [[i, i] for i in range(len(self.vertices))]
             edge_index_tensor = torch.tensor(edge_index_list, dtype=torch.long).t().contiguous()
-            # Create dummy edge features (all zeros)
-            edge_attr = torch.zeros((len(self.vertices), 21), dtype=torch.float32)
+            # Use small random features instead of zeros (helps MPNN initialization)
+            edge_attr = torch.randn((len(self.vertices), 21), dtype=torch.float32) * 0.01
 
         return Data(x=x, edge_index=edge_index_tensor, edge_attr=edge_attr)
 
