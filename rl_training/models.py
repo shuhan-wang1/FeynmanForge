@@ -493,12 +493,29 @@ class FeynmanGCPN(nn.Module):
                 action_type = output['action_type_probs'].argmax().item()
                 vertex_idx = output['vertex_probs'].argmax().item()
                 particle_type = output['particle_probs'].argmax().item()
-                target_vertex = output['vertex_probs'].argmax().item()  # Simplified
+
+                # For target_vertex, mask out vertex_idx to ensure they're different
+                target_probs = output['vertex_probs'].clone()
+                target_probs[vertex_idx] = 0
+                if target_probs.sum() > 0:
+                    target_probs = target_probs / target_probs.sum()
+                    target_vertex = target_probs.argmax().item()
+                else:
+                    target_vertex = 0  # Fallback
             else:
                 action_type = torch.multinomial(output['action_type_probs'], 1).item()
                 vertex_idx = torch.multinomial(output['vertex_probs'], 1).item()
                 particle_type = torch.multinomial(output['particle_probs'], 1).item()
-                target_vertex = torch.multinomial(output['vertex_probs'], 1).item()
+
+                # CRITICAL FIX: Mask out vertex_idx when sampling target_vertex
+                # This prevents MERGE from trying to merge a vertex with itself
+                target_probs = output['vertex_probs'].clone()
+                target_probs[vertex_idx] = 0
+                if target_probs.sum() > 0:
+                    target_probs = target_probs / target_probs.sum()
+                    target_vertex = torch.multinomial(target_probs, 1).item()
+                else:
+                    target_vertex = (vertex_idx + 1) % len(target_probs)  # Fallback
         
         return {
             'action_type': action_type,
@@ -515,31 +532,40 @@ class FeynmanGCPN(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Evaluate actions for PPO update
-        
+
         Args:
             data: State as PyG Data
             actions: Dictionary of action tensors
             vertex_states: For physics gating
-            
+
         Returns:
             log_probs: Log probabilities of actions
             values: State values
             entropy: Policy entropy
         """
         output = self.forward(data, vertex_states, return_value=True)
-        
+
         # Compute log probabilities
         action_type_log_prob = torch.log(output['action_type_probs'][actions['action_type']] + 1e-8)
         vertex_log_prob = torch.log(output['vertex_probs'][actions['vertex_idx']] + 1e-8)
         particle_log_prob = torch.log(output['particle_probs'][actions['particle_type']] + 1e-8)
-        
-        total_log_prob = action_type_log_prob + vertex_log_prob + particle_log_prob
-        
-        # Compute entropy
+
+        # CRITICAL FIX: Compute target_vertex log prob using masked distribution
+        # Mask out vertex_idx to match the sampling procedure
+        target_probs = output['vertex_probs'].clone()
+        target_probs[actions['vertex_idx']] = 0
+        if target_probs.sum() > 0:
+            target_probs = target_probs / target_probs.sum()
+        target_vertex_log_prob = torch.log(target_probs[actions['target_vertex']] + 1e-8)
+
+        total_log_prob = action_type_log_prob + vertex_log_prob + particle_log_prob + target_vertex_log_prob
+
+        # Compute entropy (including target_vertex distribution)
         action_type_entropy = -(output['action_type_probs'] * torch.log(output['action_type_probs'] + 1e-8)).sum()
         vertex_entropy = -(output['vertex_probs'] * torch.log(output['vertex_probs'] + 1e-8)).sum()
         particle_entropy = -(output['particle_probs'] * torch.log(output['particle_probs'] + 1e-8)).sum()
-        
-        total_entropy = action_type_entropy + vertex_entropy + particle_entropy
-        
+        target_vertex_entropy = -(target_probs * torch.log(target_probs + 1e-8)).sum()
+
+        total_entropy = action_type_entropy + vertex_entropy + particle_entropy + target_vertex_entropy
+
         return total_log_prob, output['value'], total_entropy
