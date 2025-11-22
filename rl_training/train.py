@@ -39,6 +39,10 @@ def parse_args():
                       help='Directory for TensorBoard logs')
     parser.add_argument('--device', type=str, default='auto',
                       help='Device to use (auto/cpu/cuda)')
+    parser.add_argument('--pretrained', type=str, default=None,
+                      help='Path to pretrained model checkpoint')
+    parser.add_argument('--entropy-coef', type=float, default=0.02,
+                      help='Entropy coefficient for exploration (reduce if using pretrained model)')
     
     return parser.parse_args()
 
@@ -138,7 +142,17 @@ def main():
         max_vertices=10,
         lambda_penalty=args.lambda_penalty
     ).to(device)
-    
+
+    # Load pretrained weights if specified
+    if args.pretrained:
+        import torch as torch_load
+        print(f"\n📦 Loading pretrained weights from {args.pretrained}...")
+        checkpoint = torch_load.load(args.pretrained, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print(f"   ✅ Loaded pretrained model!")
+        if 'accuracy' in checkpoint:
+            print(f"   Pretrain accuracy: {checkpoint['accuracy']:.2%}")
+
     # Count parameters
     num_params = sum(p.numel() for p in model.parameters())
     print(f"   Model parameters: {num_params:,}")
@@ -156,6 +170,15 @@ def main():
     # OPTIMIZED: Increased rollout_steps from 512 to 1024 for more data per update
     rollout_steps = 1024 if device.type == 'cuda' else 256  # 每个环境的步数
 
+    # Adjust entropy coefficient based on whether using pretrained model
+    # Lower entropy when using pretrained model to exploit learned behavior
+    if args.pretrained:
+        entropy_coef = args.entropy_coef  # Default: 0.02 (low exploration)
+        print(f"   Using reduced entropy coefficient: {entropy_coef} (pretrained model)")
+    else:
+        entropy_coef = 0.3  # High exploration for random initialization
+        print(f"   Using standard entropy coefficient: {entropy_coef}")
+
     trainer = PPOTrainer(
         env=env,
         model=model,
@@ -165,7 +188,7 @@ def main():
         gae_lambda=0.95,
         clip_epsilon=0.2,
         value_coef=0.5,
-        entropy_coef=0.3,  # INCREASED from 0.05 to 0.3 - critical for large action space exploration
+        entropy_coef=entropy_coef,  # Adjusted based on pretrained flag
         batch_size=batch_size,
         epochs_per_update=6,  # OPTIMIZED: Increased from 4 to 6 for better learning
         num_envs=num_parallel_envs,
