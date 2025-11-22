@@ -245,25 +245,23 @@ class PPOTrainer:
         
         for step in range(steps_per_env):
             # ===== 关键优化：批量GPU处理 =====
-            # 1. 批量准备所有状态
-            states_batch = torch.stack([s.to(self.device, non_blocking=True) for s in states])
-            
-            # 2. 批量提取vertex_states
+            # 1. 批量提取vertex_states
             vertex_states_batch = [
                 self._extract_vertex_states_from_env(self.env.envs[env_idx])
                 for env_idx in range(self.num_envs)
             ]
             
-            # 3. 批量前向传播（一次GPU调用处理所有环境）
+            # 2. 批量前向传播（逐个处理，因为Data对象不能 stack）
             actions = []
             values = []
             log_probs = []
             
             with torch.no_grad():
-                # 对每个环境的状态进行处理（由于图结构不同，无法完全batch）
-                # 但我们可以快速迭代并复用GPU
+                # 对每个环境的状态进行处理（Data对象逐个处理）
                 for env_idx in range(self.num_envs):
-                    output = self.model(states_batch[env_idx], vertex_states_batch[env_idx], return_value=True)
+                    # 将单个 Data 对象移动到 GPU
+                    state_device = states[env_idx].to(self.device, non_blocking=True)
+                    output = self.model(state_device, vertex_states_batch[env_idx], return_value=True)
                     
                     if deterministic:
                         action = {
@@ -299,7 +297,7 @@ class PPOTrainer:
             # 5. 并行执行所有环境的step（这里是真正的多核并行）
             next_states, rewards, terminateds, truncateds, infos = self.env.step(actions)
             
-            # 更新buffer中的reward
+            # 更新buffer中的reward并处理环境重置
             for env_idx in range(self.num_envs):
                 if len(self.buffer.rewards) > 0:
                     self.buffer.rewards[-(self.num_envs - env_idx)] = rewards[env_idx]
@@ -309,10 +307,35 @@ class PPOTrainer:
                 
                 done = terminateds[env_idx] or truncateds[env_idx]
                 if done:
-                    episode_rewards.append(episode_rewards_per_env[env_idx])
+                    current_reward = episode_rewards_per_env[env_idx]
+                    episode_rewards.append(current_reward)
                     episode_lengths.append(episode_lengths_per_env[env_idx])
+                    
+                    # 检查并更新最佳奖励
+                    if current_reward > self.best_reward:
+                        self.best_reward = current_reward
+                        # 从对应的环境中获取最佳图结构
+                        try:
+                            self.best_diagram = self.env.envs[env_idx].get_diagram_json()
+                            # 立即保存最佳图
+                            self._save_best_diagram()
+                        except Exception as e:
+                            # 如果无法访问，至少更新数值
+                            pass
+                    
+                    # 定期更新可视化 (只用第0个环境的数据)
+                    if env_idx == 0:
+                        try:
+                            self._save_current_diagram()
+                        except:
+                            pass
+                    
                     episode_rewards_per_env[env_idx] = 0
                     episode_lengths_per_env[env_idx] = 0
+                    
+                    # 重置已完成的环境并更新状态
+                    reset_state, _ = self.env.envs[env_idx].reset()
+                    next_states[env_idx] = reset_state
             
             states = next_states
         
@@ -625,14 +648,23 @@ class PPOTrainer:
             y_step = 100
             
             for i, p_id in enumerate(env_ref.initial_particles):
+                # 解析反粒子后缀 _bar
+                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
+                
+                # 反粒子需要从右往左绘制
+                if is_anti:
+                    p1, p2 = {'x': 150, 'y': 200 + i * y_step}, {'x': 50, 'y': 200 + i * y_step}
+                else:
+                    p1, p2 = {'x': 50, 'y': 200 + i * y_step}, {'x': 150, 'y': 200 + i * y_step}
+                
                 current_diagram.append({
                     'id': f'initial_{i}',
                     'type': 'fermion',
-                    'p1': {'x': 50, 'y': 200 + i * y_step},
-                    'p2': {'x': 150, 'y': 200 + i * y_step},
+                    'p1': p1,
+                    'p2': p2,
                     'props': {
-                        'particleId': p_id,
-                        'isAnti': False,
+                        'particleId': base_id,
+                        'isAnti': is_anti,
                         'color': 'none',
                         'category': 'fermion',
                         'group': 'initial'
@@ -640,14 +672,23 @@ class PPOTrainer:
                 })
             
             for i, p_id in enumerate(env_ref.final_particles):
+                # 解析反粒子后缀 _bar
+                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
+                
+                # 反粒子需要从右往左绘制
+                if is_anti:
+                    p1, p2 = {'x': 750, 'y': 200 + i * y_step}, {'x': 650, 'y': 200 + i * y_step}
+                else:
+                    p1, p2 = {'x': 650, 'y': 200 + i * y_step}, {'x': 750, 'y': 200 + i * y_step}
+                
                 current_diagram.append({
                     'id': f'final_{i}',
                     'type': 'fermion',
-                    'p1': {'x': 650, 'y': 200 + i * y_step},
-                    'p2': {'x': 750, 'y': 200 + i * y_step},
+                    'p1': p1,
+                    'p2': p2,
                     'props': {
-                        'particleId': p_id,
-                        'isAnti': False,
+                        'particleId': base_id,
+                        'isAnti': is_anti,
                         'color': 'none',
                         'category': 'fermion',
                         'group': 'final'

@@ -81,28 +81,41 @@ def main():
         print("Example: --reaction 'e+e->mu+mu'")
         return
     
-    # Validate particles
+    # Validate particles (支持反粒子 _bar 后缀)
     all_particles = [p.id for p in PhysicsConstants.get_all_particles()]
     for p in initial_state + final_state:
-        if p not in all_particles:
-            print(f"❌ Unknown particle: {p}")
+        # 移除 _bar 后缀进行验证
+        p_base = p.replace('_bar', '') if p.endswith('_bar') else p
+        if p_base not in all_particles:
+            print(f"❌ Unknown particle: {p_base}")
             print(f"Available particles: {', '.join(all_particles)}")
+            print(f"💡 Use '_bar' suffix for antiparticles, e.g., 'e_bar' for positron")
             return
     
     # Create environment
     print("\n📦 Setting up environment...")
     
-    # 降低并行环境数，增加每个环境的复杂度
-    num_parallel_envs = 1  # 单环境，专注于GPU计算
-    print(f"   Creating environment...")
+    # 使用并行环境充分利用 CPU 多核
+    num_parallel_envs = 128 * 2 # 8个并行环境（根据CPU核心数调整）
+    print(f"   Creating {num_parallel_envs} parallel environments...")
     
-    env = FeynmanDiagramEnv(
+    # 创建并行环境包装器
+    env = make_parallel_envs(
+        num_envs=num_parallel_envs,
         initial_state=initial_state,
         final_state=final_state,
         max_vertices=10,
         max_steps=50
     )
-    print(f"   ✅ Environment created")
+    print(f"   ✅ {num_parallel_envs} parallel environments created")
+    
+    # 创建一个单独的环境用于可视化
+    vis_env = FeynmanDiagramEnv(
+        initial_state=initial_state,
+        final_state=final_state,
+        max_vertices=10,
+        max_steps=50
+    )
     
     # Determine model size based on device
     hidden_dim = 384 if device.type == 'cuda' else args.hidden_dim
@@ -133,9 +146,10 @@ def main():
     # Create trainer
     print("⚙️  Configuring PPO trainer...")
     
-    # Use optimized batch size for GPU
-    batch_size = 512 if device.type == 'cuda' else 64  # 大幅增加batch size
-    rollout_steps = 1024 if device.type == 'cuda' else 512  # 减少rollout，增加update比重
+    # Use optimized batch size for GPU and parallel envs
+    # batch_size 应该是 num_parallel_envs 的倍数
+    batch_size = num_parallel_envs * 2 if device.type == 'cuda' else 128
+    rollout_steps = 512 if device.type == 'cuda' else 256  # 每个环境的步数
     
     trainer = PPOTrainer(
         env=env,
@@ -146,25 +160,26 @@ def main():
         gae_lambda=0.95,
         clip_epsilon=0.2,
         value_coef=0.5,
-        entropy_coef=0.01,
+        entropy_coef=0.05,  # 从 0.01 提高到 0.05，强制探索
         batch_size=batch_size,
-        epochs_per_update=10,  # 增加epoch提高GPU利用率
+        epochs_per_update=4,  # 降低以加速迭代
         num_envs=num_parallel_envs
     )
     
     # Create reaction config for visualization
     create_reaction_config(initial_state, final_state)
     
-    # 设置trainer使用环境进行可视化
-    trainer.vis_env = env
+    # 设置trainer使用单独的可视化环境
+    trainer.vis_env = vis_env
     
     print("\n✅ Setup complete!")
+    print(f"   Parallel environments: {num_parallel_envs}")
+    print(f"   Batch size: {batch_size}")
+    print(f"   Rollout steps: {rollout_steps}")
+    print(f"   PPO epochs per update: 4")
     print(f"   Checkpoints will be saved to: {args.checkpoint_dir}")
     print(f"   TensorBoard logs: {args.log_dir}")
     print(f"   Training monitor: Open training_viz.html in your browser")
-    print(f"   Batch size: {batch_size} (large for GPU)")
-    print(f"   Rollout steps: {rollout_steps} (reduced)")
-    print(f"   PPO epochs: 10 (increased for more GPU compute)")
     if device.type == 'cuda':
         print(f"   🚀 GPU optimizations: ENABLED")
     print("\n" + "=" * 80)
@@ -178,7 +193,7 @@ def main():
         total_timesteps=args.timesteps,
         rollout_steps=rollout_steps,
         log_interval=10,
-        save_interval=100,
+        save_interval=10,
         checkpoint_dir=args.checkpoint_dir,
         log_dir=args.log_dir
     )

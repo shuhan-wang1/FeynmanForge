@@ -80,7 +80,7 @@ def check_and_fix_visualization():
     # 检查 4: training_viz.html 配置
     print("\n4️⃣  检查 training_viz.html 配置...")
     
-    viz_file = '../training_viz.html'
+    viz_file = 'training_viz.html'
     if os.path.exists(viz_file):
         print(f"   ✅ {viz_file} 存在")
         print(f"   💡 在浏览器中打开: file://{os.path.abspath(viz_file)}")

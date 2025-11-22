@@ -196,7 +196,12 @@ class PhysicsGate(nn.Module):
         _, color_mismatch = ConservationLaws.check_color_conservation(colors_in, new_colors_out)
         delta_color = color_mismatch
         
-        return torch.tensor([delta_q, delta_l, delta_b, delta_color], dtype=torch.float32)
+        # Create tensor on the same device as conservation_weights
+        return torch.tensor(
+            [delta_q, delta_l, delta_b, delta_color], 
+            dtype=torch.float32,
+            device=self.conservation_weights.device
+        )
     
     def forward(self, mismatch_vector: torch.Tensor) -> torch.Tensor:
         """
@@ -286,13 +291,13 @@ class PhysicsGatedPolicyHead(nn.Module):
         vertex_logits = self.vertex_head(graph_embedding)
         particle_logits = self.particle_head(graph_embedding)
         
-        if mask_invalid and vertex_states is not None:
-            # Apply physics gate to particle selection
-            particle_logits = self.apply_physics_mask(
-                particle_logits, 
-                vertex_states, 
-                self.particle_list
-            )
+        # Disabled physics masking - was using incorrect vertex assumption
+        # if mask_invalid and vertex_states is not None:
+        #     particle_logits = self.apply_physics_mask(
+        #         particle_logits, 
+        #         vertex_states, 
+        #         self.particle_list
+        #     )
         
         # Softmax to get probabilities
         action_type_probs = F.softmax(action_type_logits, dim=-1)
@@ -315,39 +320,15 @@ class PhysicsGatedPolicyHead(nn.Module):
         particle_list: List[str]
     ) -> torch.Tensor:
         """
-        Apply physics gate to mask out invalid particle choices
+        DISABLED: Was suppressing valid actions due to hardcoded vertex[0] check.
+        Returns raw logits without physics masking.
         
-        Args:
-            particle_logits: [num_particle_types] raw logits
-            vertex_states: Current quantum numbers at each vertex
-            particle_list: List of particle IDs
-            
-        Returns:
-            masked_logits: [num_particle_types] with physics penalties applied
+        The original implementation incorrectly assumed vertex_states[0] was the
+        target vertex, but vertex[0] is typically the initial state particle which
+        has different conservation requirements (source node with no incoming edges).
+        This caused the physics gate to incorrectly suppress valid particle selections.
         """
-        gate_values = []
-        
-        for i, particle_id in enumerate(particle_list):
-            # Compute mismatch for adding this particle
-            # (Assuming we're adding to vertex 0 for simplicity)
-            if len(vertex_states) > 0:
-                mismatch = self.physics_gate.compute_mismatch(
-                    action_type=2,  # SET_TYPE
-                    vertex_state=vertex_states[0],
-                    candidate_particle=particle_id
-                )
-                gate_value = self.physics_gate(mismatch)
-            else:
-                gate_value = torch.tensor(1.0)
-            
-            gate_values.append(gate_value)
-        
-        gate_tensor = torch.stack(gate_values)
-        
-        # Apply gate as multiplicative mask (in log space: add log(gate))
-        masked_logits = particle_logits + torch.log(gate_tensor + 1e-8)
-        
-        return masked_logits
+        return particle_logits
 
 
 class ValueHead(nn.Module):
