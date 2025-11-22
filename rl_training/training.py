@@ -304,8 +304,9 @@ class PPOTrainer:
                         # DEBUG: Print action distribution for first environment periodically
                         if env_idx == 0 and step % 100 == 0 and self.global_step < 5000:
                             action_names = ['CONNECT', 'BRANCH', 'SET_TYPE', 'TERMINATE', 'MERGE']
+                            probs = output['action_type_probs']
                             print(f"\n[DEBUG Global Step {self.global_step}, Rollout Step {step}]")
-                            print(f"Action probs: {' '.join([f'{action_names[i]}={output[\"action_type_probs\"][i]:.3f}' for i in range(5)])}")
+                            print(f"Action probs: {' '.join([f'{action_names[i]}={probs[i]:.3f}' for i in range(5)])}")
                             print(f"Chosen: {action_names[action['action_type']]} | Value: {value:.3f}")
 
                         action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
