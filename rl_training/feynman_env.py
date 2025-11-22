@@ -598,25 +598,31 @@ class FeynmanDiagramEnv(gym.Env):
         reward = 0.0
         is_connected = self._is_graph_connected()
         no_dangling = self._no_dangling_internal_lines()
-        
+
         if not (is_connected and no_dangling):
             reward -= 10.0
             return reward
         else:
             reward += self.reward_weights['topology_valid']
-            
+
         initial_match = self._check_external_match(self.initial_particles, 'initial')
         final_match = self._check_external_match(self.final_particles, 'final')
-        
+
         if initial_match and final_match:
             reward += self.reward_weights['target_match']
         else:
             reward -= 5.0
-            
+
+        # CRITICAL FIX: Check GLOBAL conservation laws across entire diagram
+        # Previous bug: Only checked vertex-by-vertex, allowed extra particles (neutrinos)
+        global_conservation_ok = self._check_global_conservation()
+        if not global_conservation_ok:
+            reward -= 100.0  # HUGE penalty for violating global conservation
+
         # REMOVED: Complexity penalty was discouraging model from building ANY topology!
         # num_interaction_vertices = sum(1 for v in self.vertices if v['type'] == 'interaction')
         # reward += self.reward_weights['complexity_penalty'] * num_interaction_vertices
-        
+
         return reward
 
     def _compute_progress_score(self) -> float:
@@ -647,6 +653,63 @@ class FeynmanDiagramEnv(gym.Env):
 
         # Normalize to 0-1 range
         return score / 100.0
+
+    def _check_global_conservation(self) -> bool:
+        """
+        CRITICAL: Check global conservation laws across the ENTIRE diagram.
+
+        This prevents diagrams like mu+mu_bar->e+e_bar+neutrino which conserve
+        charge locally at each vertex but violate global lepton number conservation.
+
+        Returns:
+            True if all global conservation laws are satisfied
+        """
+        # Collect all initial state particles (incoming to diagram)
+        initial_edges = []
+        for v in self.vertices:
+            if v['type'] == 'initial':
+                for edge_id in v['connected_edges']:
+                    edge = self.edges[edge_id]
+                    if edge['is_external']:
+                        initial_edges.append(edge)
+
+        # Collect all final state particles (outgoing from diagram)
+        final_edges = []
+        for v in self.vertices:
+            if v['type'] == 'final':
+                for edge_id in v['connected_edges']:
+                    edge = self.edges[edge_id]
+                    if edge['is_external']:
+                        final_edges.append(edge)
+
+        # Check global charge conservation
+        total_charge_in = sum(self._get_charge(e) for e in initial_edges)
+        total_charge_out = sum(self._get_charge(e) for e in final_edges)
+        if abs(total_charge_in - total_charge_out) > 1e-6:
+            return False
+
+        # Check global lepton number conservation (CRITICAL for neutrino bug)
+        total_lepton_in = sum(self._get_lepton(e) for e in initial_edges)
+        total_lepton_out = sum(self._get_lepton(e) for e in final_edges)
+        if abs(total_lepton_in - total_lepton_out) > 1e-6:
+            return False
+
+        # Check global baryon number conservation
+        total_baryon_in = sum(self._get_baryon(e) for e in initial_edges)
+        total_baryon_out = sum(self._get_baryon(e) for e in final_edges)
+        if abs(total_baryon_in - total_baryon_out) > 1e-6:
+            return False
+
+        # Check that we have the EXACT particles we expect (no extras!)
+        initial_count = len(initial_edges)
+        final_count = len(final_edges)
+        expected_initial = len(self.initial_particles)
+        expected_final = len(self.final_particles)
+
+        if initial_count != expected_initial or final_count != expected_final:
+            return False
+
+        return True
 
     def _check_external_match(self, target_particles: List[str], vertex_type: str) -> bool:
         external_vertices = [v for v in self.vertices if v['type'] == vertex_type]

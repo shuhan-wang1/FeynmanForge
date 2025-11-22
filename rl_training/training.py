@@ -311,6 +311,7 @@ class PPOTrainer:
                             probs = output['action_type_probs']
                             print(f"\n[DEBUG Global Step {self.global_step}, Rollout Step {step}]")
                             print(f"Action probs: {' '.join([f'{action_names[i]}={probs[i]:.3f}' for i in range(5)])}")
+                            print(f"  ⚠️  TERMINATE prob: {probs[3]:.4f} (should be < 0.01 with -5.0 bias)")
                             print(f"Chosen: {action_names[action['action_type']]} | Value: {value:.3f}")
 
                         action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
@@ -428,13 +429,16 @@ class PPOTrainer:
             for i, name in enumerate(action_names):
                 count = action_type_counts[i]
                 pct = 100.0 * count / total_actions if total_actions > 0 else 0
-                print(f"  {name:12s}: {count:5d} ({pct:5.1f}%)")
+                marker = " ⚠️  TOO HIGH!" if i == 3 and pct > 2.0 else ""  # Warn if TERMINATE > 2%
+                print(f"  {name:12s}: {count:5d} ({pct:5.1f}%){marker}")
             print(f"\nEpisode Terminations:")
             print(f"  TERMINATED (chose TERMINATE action): {termination_reasons['terminated']}")
             print(f"  TRUNCATED (hit max_steps):            {termination_reasons['truncated']}")
+            term_rate = 100.0 * termination_reasons['terminated'] / (termination_reasons['terminated'] + termination_reasons['truncated']) if (termination_reasons['terminated'] + termination_reasons['truncated']) > 0 else 0
+            print(f"  TERMINATE rate: {term_rate:.1f}% (should be < 10%)")
             print(f"\nEpisode Stats:")
             print(f"  Completed episodes: {len(episode_lengths)}")
-            print(f"  Mean length: {np.mean(episode_lengths) if episode_lengths else 0:.2f}")
+            print(f"  Mean length: {np.mean(episode_lengths) if episode_lengths else 0:.2f} (target: 15-30)")
             print(f"  Mean reward: {np.mean(episode_rewards) if episode_rewards else 0:.2f}")
             print(f"{'='*80}\n")
 

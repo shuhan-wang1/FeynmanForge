@@ -298,12 +298,12 @@ class PhysicsGatedPolicyHead(nn.Module):
         vertex_logits = self.vertex_head(graph_embedding)
         particle_logits = self.particle_head(graph_embedding)
 
-        # EXPLORATION FIX: Apply strong bias against TERMINATE to encourage exploration
+        # EXPLORATION FIX: Apply VERY strong bias against TERMINATE to force exploration
         # The model was getting stuck in local minimum of "always terminate immediately"
-        # This bias helps it explore building diagrams and discover the high rewards
-        # Bias reduces as model learns (could be annealed over time in training loop)
+        # This bias forces it to explore building diagrams and discover the high rewards
+        # Bias can be annealed over time in training loop if needed
         TERMINATE_ACTION_IDX = 3
-        TERMINATE_BIAS = -3.0  # Reduces TERMINATE probability by ~20x initially
+        TERMINATE_BIAS = -5.0  # Reduces TERMINATE probability by ~150x (from 20% -> 0.13%)
         action_type_logits[..., TERMINATE_ACTION_IDX] = action_type_logits[..., TERMINATE_ACTION_IDX] + TERMINATE_BIAS
 
         # CRITICAL FIX: Mask invalid vertex indices
