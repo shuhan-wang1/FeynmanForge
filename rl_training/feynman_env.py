@@ -661,7 +661,12 @@ class FeynmanDiagramEnv(gym.Env):
         return True
     
     def _get_observation(self) -> Data:
-        # ... (same as before, simplified for brevity) ...
+        """
+        Build PyG Data object from current diagram state
+
+        CRITICAL FIX: Include external edges as self-loops so graph is always connected.
+        Without this, initial state has 0 edges and MPNN can't do message passing!
+        """
         # Node features
         node_features = []
         for v in self.vertices:
@@ -669,11 +674,11 @@ class FeynmanDiagramEnv(gym.Env):
             if v['type'] == 'initial': type_vec[0] = 1
             elif v['type'] == 'final': type_vec[1] = 1
             elif v['type'] == 'interaction': type_vec[2] = 1
-            
+
             x_norm = v['x'] / self.canvas_width
             y_norm = v['y'] / self.canvas_height
             num_conn = len(v['connected_edges'])
-            
+
             q_net = 0.0; l_net = 0.0; b_net = 0.0
             for edge_id in v['connected_edges']:
                 edge = self.edges[edge_id]
@@ -683,11 +688,13 @@ class FeynmanDiagramEnv(gym.Env):
                 q_net += sign * self._get_charge(edge)
                 l_net += sign * self._get_lepton(edge)
                 b_net += sign * self._get_baryon(edge)
-            
+
             node_features.append(type_vec + [x_norm, y_norm, num_conn, q_net, l_net, b_net])
-            
+
         edge_index = []
         edge_features = []
+
+        # Add connected edges (internal propagators)
         for edge in self.edges:
             if edge['state'] == 'consumed': continue
             if edge['source'] is not None and edge['target'] is not None:
@@ -695,15 +702,55 @@ class FeynmanDiagramEnv(gym.Env):
                 edge_features.append(ParticleEncoder.encode_particle(
                     edge['particle_id'], edge['is_anti'], edge['color']
                 ))
-        
+
+        # CRITICAL FIX: Add self-loops for external edges (initial/final particles)
+        # This ensures graph is always connected so MPNN can propagate information
+        for edge in self.edges:
+            if edge['state'] == 'consumed': continue
+            if edge['is_external']:
+                # External edge with only source (initial particle going out)
+                if edge['source'] is not None and edge['target'] is None:
+                    vertex_id = edge['source']
+                    edge_index.append([vertex_id, vertex_id])  # Self-loop
+                    edge_features.append(ParticleEncoder.encode_particle(
+                        edge['particle_id'], edge['is_anti'], edge['color']
+                    ))
+                # External edge with only target (final particle coming in)
+                elif edge['source'] is None and edge['target'] is not None:
+                    vertex_id = edge['target']
+                    edge_index.append([vertex_id, vertex_id])  # Self-loop
+                    edge_features.append(ParticleEncoder.encode_particle(
+                        edge['particle_id'], edge['is_anti'], edge['color']
+                    ))
+
+        # ADDITIONAL FIX: Add fully-connected edges between external vertices
+        # This allows MPNN to propagate information between initial and final particles
+        # Critical for learning which particles should connect
+        if len(self.vertices) > 1:
+            for i in range(len(self.vertices)):
+                for j in range(len(self.vertices)):
+                    if i != j:
+                        # Check if not already connected
+                        already_connected = any(
+                            (edge_index[k][0] == i and edge_index[k][1] == j)
+                            for k in range(len(edge_index))
+                        )
+                        if not already_connected:
+                            edge_index.append([i, j])
+                            # Use zero features for virtual edges (model will learn to ignore)
+                            edge_features.append(np.zeros(21, dtype=np.float32))
+
         x = torch.tensor(np.array(node_features, dtype=np.float32), dtype=torch.float32)
         if len(edge_index) > 0:
             edge_index_tensor = torch.tensor(np.array(edge_index, dtype=np.int64), dtype=torch.long).t().contiguous()
             edge_attr = torch.from_numpy(np.stack(edge_features)).float()
         else:
-            edge_index_tensor = torch.empty((2, 0), dtype=torch.long)
-            edge_attr = torch.empty((0, 21), dtype=torch.float32)
-            
+            # Fallback: At minimum, add self-loops to all vertices
+            edge_index_list = [[i, i] for i in range(len(self.vertices))]
+            edge_index_tensor = torch.tensor(edge_index_list, dtype=torch.long).t().contiguous()
+            # Create dummy edge features (all zeros)
+            edge_attr = torch.zeros((len(self.vertices), 21), dtype=torch.float32)
+
         return Data(x=x, edge_index=edge_index_tensor, edge_attr=edge_attr)
 
     def _get_info(self) -> Dict:
