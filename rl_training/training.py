@@ -246,6 +246,10 @@ class PPOTrainer:
         episode_rewards = []
         episode_lengths = []
 
+        # DEBUG: Track action type distribution
+        action_type_counts = [0, 0, 0, 0, 0]  # [CONNECT, BRANCH, SET_TYPE, TERMINATE, MERGE]
+        termination_reasons = {'terminated': 0, 'truncated': 0}  # Track why episodes end
+
         # 重置所有环境
         states, infos = self.env.reset()
         episode_rewards_per_env = [0] * self.num_envs
@@ -314,6 +318,9 @@ class PPOTrainer:
                         particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
                         log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
 
+                        # DEBUG: Track action types
+                        action_type_counts[action['action_type']] += 1
+
                         actions.append(action)
                         values.append(value)
                         log_probs.append(log_prob)
@@ -347,6 +354,9 @@ class PPOTrainer:
                         particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
                         log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
 
+                        # DEBUG: Track action types
+                        action_type_counts[action['action_type']] += 1
+
                         actions.append(action)
                         values.append(value)
                         log_probs.append(log_prob)
@@ -369,6 +379,12 @@ class PPOTrainer:
                 
                 done = terminateds[env_idx] or truncateds[env_idx]
                 if done:
+                    # DEBUG: Track termination reason
+                    if terminateds[env_idx]:
+                        termination_reasons['terminated'] += 1
+                    if truncateds[env_idx]:
+                        termination_reasons['truncated'] += 1
+
                     current_reward = episode_rewards_per_env[env_idx]
                     episode_rewards.append(current_reward)
                     episode_lengths.append(episode_lengths_per_env[env_idx])
@@ -400,7 +416,28 @@ class PPOTrainer:
                     next_states[env_idx] = reset_state
             
             states = next_states
-        
+
+        # DEBUG: Print action type distribution
+        if self.global_step < 1000 or self.global_step % 500 == 0:
+            action_names = ['CONNECT', 'BRANCH', 'SET_TYPE', 'TERMINATE', 'MERGE']
+            total_actions = sum(action_type_counts)
+            print(f"\n{'='*80}")
+            print(f"[ROLLOUT DEBUG] Global Step {self.global_step}")
+            print(f"{'='*80}")
+            print(f"Action Type Distribution (total={total_actions}):")
+            for i, name in enumerate(action_names):
+                count = action_type_counts[i]
+                pct = 100.0 * count / total_actions if total_actions > 0 else 0
+                print(f"  {name:12s}: {count:5d} ({pct:5.1f}%)")
+            print(f"\nEpisode Terminations:")
+            print(f"  TERMINATED (chose TERMINATE action): {termination_reasons['terminated']}")
+            print(f"  TRUNCATED (hit max_steps):            {termination_reasons['truncated']}")
+            print(f"\nEpisode Stats:")
+            print(f"  Completed episodes: {len(episode_lengths)}")
+            print(f"  Mean length: {np.mean(episode_lengths) if episode_lengths else 0:.2f}")
+            print(f"  Mean reward: {np.mean(episode_rewards) if episode_rewards else 0:.2f}")
+            print(f"{'='*80}\n")
+
         return {
             'episode_rewards': episode_rewards,
             'episode_lengths': episode_lengths,

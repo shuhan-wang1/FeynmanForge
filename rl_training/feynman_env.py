@@ -196,8 +196,8 @@ class FeynmanDiagramEnv(gym.Env):
             'reward': 0.0  # Will be updated at end
         }
 
-        # DEBUG: Log actions for first 100 steps
-        if self.step_count <= 100:
+        # DEBUG: Log actions for first 20 steps only (reduced spam)
+        if self.step_count <= 20:
             print(f"[ENV Step {self.step_count}] Action: {action_names[action_type]}, vertex_idx={action.get('vertex_idx', 'N/A')}, num_vertices={len(self.vertices)}")
 
         if action_type == self.ACTION_TERMINATE:
@@ -217,7 +217,7 @@ class FeynmanDiagramEnv(gym.Env):
         elif action_type == self.ACTION_CONNECT:
             success = self._execute_connect(action['vertex_idx'], action['target_vertex'])
             action_record['success'] = success  # Record success
-            if self.step_count <= 100:
+            if self.step_count <= 20:
                 print(f"  → CONNECT success={success}, reward_before={reward:.2f}")
             if success:
                 reward += self.reward_weights.get('successful_connection', 2.0)
@@ -231,7 +231,7 @@ class FeynmanDiagramEnv(gym.Env):
         elif action_type == self.ACTION_BRANCH:
             success = self._execute_branch(action['vertex_idx'], action['particle_type'])
             action_record['success'] = success  # Record success
-            if self.step_count <= 100:
+            if self.step_count <= 20:
                 print(f"  → BRANCH success={success}, num_vertices_after={len(self.vertices)}")
             if success:
                 reward += self.reward_weights.get('vertex_created', 1.0)
@@ -278,7 +278,7 @@ class FeynmanDiagramEnv(gym.Env):
         self.action_history.append(action_record)
 
         # DEBUG: Log final reward and termination
-        if self.step_count <= 100:
+        if self.step_count <= 20:
             print(f"  → Final reward={reward:.2f}, terminated={self.terminated}, truncated={truncated}")
 
         return self._get_observation(), reward, self.terminated, truncated, self._get_info()
