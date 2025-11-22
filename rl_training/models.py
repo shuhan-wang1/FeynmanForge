@@ -436,7 +436,10 @@ class FeynmanGCPN(nn.Module):
         node_embeddings, graph_embedding = self.encoder(data)
 
         # CRITICAL FIX: Extract actual number of vertices from graph
-        num_vertices = data.x.shape[0] if not hasattr(data, 'batch') else None
+        # For individual graphs: data.x.shape[0] is the number of nodes
+        # For batched graphs: This gets called on individual graphs after to_data_list()
+        # so data.x.shape[0] is still correct
+        num_vertices = data.x.shape[0]
 
         # Policy (with vertex masking)
         policy_output = self.policy_head(
