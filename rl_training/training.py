@@ -813,9 +813,11 @@ class PPOTrainer:
                 'episode': self.global_step // 2048,
                 'reward': 0.0,
                 'initial_state': env_ref.initial_particles,
-                'final_state': env_ref.final_particles
+                'final_state': env_ref.final_particles,
+                'num_steps': len(env_ref.action_history)
             },
-            'shapes': current_diagram
+            'shapes': current_diagram,
+            'actions': env_ref.action_history  # NEW: Include action history for visualization
         }
         with open('diagrams/current_diagram.json', 'w', encoding='utf-8') as f:
             json.dump(diagram_data, f, indent=2, ensure_ascii=False)
