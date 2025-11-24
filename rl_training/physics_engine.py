@@ -359,11 +359,14 @@ class ParticleEncoder:
     }
     
     @staticmethod
-    def encode_particle(particle_id: str, is_anti: bool = False, color: Optional[str] = None) -> np.ndarray:
+    def encode_particle(particle_id: str, is_anti: bool = False, color: Optional[str] = None, is_reverse: bool = False) -> np.ndarray:
         """
         Encode a particle as a feature vector:
-        [Type(9), Spin(1), Charge(1), Lepton(1), Baryon(1), Color(6), IsAnti(1), Mass(1)]
-        Total: 21 features
+        [Type(9), Spin(1), Charge(1), Lepton(1), Baryon(1), Color(6), IsAnti(1), Mass(1), IsReverse(1)]
+        Total: 22 features
+        
+        Args:
+            is_reverse: True if this is a reverse edge for bidirectional message passing
         """
         p = PhysicsConstants.get_particle_by_id(particle_id)
         b = PhysicsConstants.get_boson_by_id(particle_id)
@@ -409,6 +412,9 @@ class ParticleEncoder:
         # Normalize mass (log scale)
         mass_normalized = np.log10(mass + 1e-3)
         
+        # IsReverse flag (for bidirectional message passing)
+        is_reverse_flag = 1.0 if is_reverse else 0.0
+        
         return np.concatenate([
             type_vec,           # 9 features
             [spin],             # 1 feature
@@ -417,5 +423,6 @@ class ParticleEncoder:
             [baryon],           # 1 feature
             color_vec,          # 6 features
             [is_anti_flag],     # 1 feature
-            [mass_normalized]   # 1 feature
-        ])  # Total: 21 features
+            [mass_normalized],  # 1 feature
+            [is_reverse_flag]   # 1 feature (NEW: marks reverse edges)
+        ])  # Total: 22 features

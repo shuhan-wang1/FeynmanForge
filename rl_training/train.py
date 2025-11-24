@@ -135,9 +135,15 @@ def main():
         checkpoint = torch_load.load(args.pretrained, map_location=device)
 
         # Detect architecture from pretrained weights
-        # Check node_encoder shape to determine hidden_dim
-        node_encoder_shape = checkpoint['model_state_dict']['encoder.node_encoder.weight'].shape
+        # Check node_encoder shape to determine hidden_dim and input_dim
+        node_encoder_weight = checkpoint['model_state_dict']['encoder.node_encoder.weight']
+        node_encoder_shape = node_encoder_weight.shape
         hidden_dim = node_encoder_shape[0]  # First dimension is hidden_dim
+        old_node_input_dim = node_encoder_shape[1]  # Second dimension is input_dim
+        
+        # Check edge_encoder shape for edge_input_dim
+        edge_encoder_weight = checkpoint['model_state_dict']['encoder.edge_encoder.weight']
+        old_edge_input_dim = edge_encoder_weight.shape[1]
 
         # Count MP layers by checking how many mp_layers.X exist
         num_mp_layers = 0
@@ -147,6 +153,16 @@ def main():
                 num_mp_layers = max(num_mp_layers, layer_idx + 1)
 
         print(f"   Detected architecture: hidden_dim={hidden_dim}, num_mp_layers={num_mp_layers}")
+        print(f"   Old: node_input_dim={old_node_input_dim}, edge_input_dim={old_edge_input_dim}")
+        print(f"   New: node_input_dim=7, edge_input_dim=22")
+        
+        # Check compatibility
+        if old_node_input_dim != 7 or old_edge_input_dim != 22:
+            print(f"\n⚠️  WARNING: Pretrained model has incompatible architecture!")
+            print(f"   Old model was trained with node_input_dim={old_node_input_dim}, edge_input_dim={old_edge_input_dim}")
+            print(f"   New architecture requires node_input_dim=7, edge_input_dim=22")
+            print(f"   SOLUTION: Training from scratch (cannot load incompatible weights)")
+            args.pretrained = None  # Disable pretrained loading
     else:
         # Determine model size based on device
         # OPTIMIZED: Increased hidden_dim from 384 to 768 for better GPU utilization
@@ -158,9 +174,10 @@ def main():
     print("🧠 Building neural network...")
     num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
 
+    # ARCHITECTURE UPDATE: node_input_dim=7 (removed x, y), edge_input_dim=22 (added is_reverse)
     model = FeynmanGCPN(
-        node_input_dim=9,
-        edge_input_dim=21,
+        node_input_dim=7,   # Updated from 9: removed x_norm, y_norm (canvas position bias)
+        edge_input_dim=22,  # Updated from 21: added is_reverse flag (bidirectional edges)
         hidden_dim=hidden_dim,
         num_mp_layers=num_mp_layers,
         num_action_types=5,  # Updated from 4 to 5 for ACTION_MERGE
@@ -191,8 +208,10 @@ def main():
     # OPTIMIZED: Increased batch size from 512 to 2048 for better GPU utilization
     # batch_size 应该是 num_parallel_envs 的倍数
     batch_size = 2048 if device.type == 'cuda' else 128
-    # OPTIMIZED: Increased rollout_steps from 512 to 1024 for more data per update
-    rollout_steps = 1024 if device.type == 'cuda' else 256  # 每个环境的步数
+    # FIX: rollout_steps should be enough for each env to complete multiple episodes
+    # With 512 parallel envs, we want each env to run at least 50 steps per rollout
+    # Total transitions per rollout = rollout_steps (after the fix in training.py)
+    rollout_steps = 2048 if device.type == 'cuda' else 256  # Minimum steps per env
 
     # Adjust entropy coefficient based on whether using pretrained model
     # Lower entropy when using pretrained model to exploit learned behavior

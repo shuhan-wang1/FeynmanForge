@@ -173,17 +173,21 @@ class PPOTrainer:
             # Get vertex states for physics gating
             vertex_states = self._extract_vertex_states()
             
+            # ACTION MASKING: Get validity masks from environment
+            action_masks_np = self.env.get_action_masks()
+            action_masks = {k: torch.from_numpy(v).to(self.device) for k, v in action_masks_np.items()}
+            
             # Get action and value
             with torch.no_grad():
-                output = self.model(state_device, vertex_states, return_value=True)
+                output = self.model(state_device, vertex_states, return_value=True, action_masks=action_masks)
 
                 if deterministic:
                     action_type = output['action_type_probs'].argmax().item()
                     vertex_idx = output['vertex_probs'].argmax().item()
                     particle_type = output['particle_probs'].argmax().item()
 
-                    # Mask out vertex_idx when selecting target_vertex
-                    target_probs = output['vertex_probs'].clone()
+                    # Use target_vertex_probs from the dedicated target head
+                    target_probs = output['target_vertex_probs'].clone()
                     target_probs[vertex_idx] = 0
                     if target_probs.sum() > 0:
                         target_probs = target_probs / target_probs.sum()
@@ -201,17 +205,34 @@ class PPOTrainer:
                     # Log prob calculation
                     target_vertex_log_prob = torch.log(target_probs[target_vertex] + 1e-8)
                 else:
-                    action_type = torch.multinomial(output['action_type_probs'], 1).item()
-                    vertex_idx = torch.multinomial(output['vertex_probs'], 1).item()
-                    particle_type = torch.multinomial(output['particle_probs'], 1).item()
+                    # SAFETY: Define safe_multinomial for single env path
+                    def safe_multinomial_single(probs, num_samples=1):
+                        """Safely sample from probability distribution"""
+                        if torch.any(torch.isnan(probs)) or torch.any(torch.isinf(probs)):
+                            probs = torch.where(torch.isnan(probs) | torch.isinf(probs),
+                                               torch.zeros_like(probs), probs)
+                        if probs.sum() == 0:
+                            probs = torch.ones_like(probs) / len(probs)
+                        else:
+                            probs = probs / probs.sum()
+                        probs = torch.clamp(probs, min=0)
+                        if probs.sum() == 0:
+                            probs = torch.ones_like(probs) / len(probs)
+                        else:
+                            probs = probs / probs.sum()
+                        return torch.multinomial(probs, num_samples)
+                    
+                    action_type = safe_multinomial_single(output['action_type_probs'], 1).item()
+                    vertex_idx = safe_multinomial_single(output['vertex_probs'], 1).item()
+                    particle_type = safe_multinomial_single(output['particle_probs'], 1).item()
 
-                    # CRITICAL FIX: Mask out vertex_idx when sampling target_vertex
-                    # Prevents MERGE(vertex, vertex) which always fails
-                    target_probs = output['vertex_probs'].clone()
+                    # Use target_vertex_probs from the dedicated target head
+                    # Mask out vertex_idx to prevent MERGE(vertex, vertex)
+                    target_probs = output['target_vertex_probs'].clone()
                     target_probs[vertex_idx] = 0
                     if target_probs.sum() > 0:
                         target_probs = target_probs / target_probs.sum()
-                        target_vertex = torch.multinomial(target_probs, 1).item()
+                        target_vertex = safe_multinomial_single(target_probs, 1).item()
                     else:
                         target_vertex = (vertex_idx + 1) % len(target_probs)
 
@@ -288,7 +309,11 @@ class PPOTrainer:
         episode_rewards_per_env = [0] * self.num_envs
         episode_lengths_per_env = [0] * self.num_envs
 
-        steps_per_env = num_steps // self.num_envs
+        # FIX: num_steps is the total number of transitions to collect
+        # With num_envs parallel environments, each env runs num_steps // num_envs steps
+        # BUT we want each env to run ENOUGH steps to complete episodes
+        # So use num_steps directly as steps per env (total transitions = num_steps * num_envs)
+        steps_per_env = max(num_steps // self.num_envs, 50)  # At least 50 steps per env
 
         for step in range(steps_per_env):
             # ===== 关键优化：批量GPU处理 =====
@@ -298,7 +323,13 @@ class PPOTrainer:
                 for env_idx in range(self.num_envs)
             ]
 
-            # 2. **NEW: Batch all graphs together for parallel GPU processing**
+            # 2. ACTION MASKING: Batch extract action masks from all environments
+            action_masks_batch = [
+                self.env.envs[env_idx].get_action_masks()
+                for env_idx in range(self.num_envs)
+            ]
+
+            # 3. **NEW: Batch all graphs together for parallel GPU processing**
             actions = []
             values = []
             log_probs = []
@@ -310,7 +341,7 @@ class PPOTrainer:
 
                     # Process entire batch at once (MAJOR SPEEDUP)
                     with autocast('cuda', enabled=self.use_amp):
-                        outputs = self._process_batched_states(batched_state, vertex_states_batch)
+                        outputs = self._process_batched_states(batched_state, vertex_states_batch, action_masks_batch)
 
                     # Unbatch results
                     for env_idx in range(self.num_envs):
@@ -318,22 +349,63 @@ class PPOTrainer:
                             'action_type_probs': outputs['action_type_probs'][env_idx],
                             'vertex_probs': outputs['vertex_probs'][env_idx],
                             'particle_probs': outputs['particle_probs'][env_idx],
+                            'target_vertex_probs': outputs['target_vertex_probs'][env_idx],
                             'value': outputs['values'][env_idx]
                         }
 
                         if deterministic:
+                            vertex_idx = output['vertex_probs'].argmax().item()
+                            # Use target_vertex_probs and mask out source vertex
+                            target_probs = output['target_vertex_probs'].clone()
+                            target_probs[vertex_idx] = 0
+                            if target_probs.sum() > 0:
+                                target_probs = target_probs / target_probs.sum()
+                                target_vertex = target_probs.argmax().item()
+                            else:
+                                target_vertex = 0
+                            
                             action = {
                                 'action_type': output['action_type_probs'].argmax().item(),
-                                'vertex_idx': output['vertex_probs'].argmax().item(),
+                                'vertex_idx': vertex_idx,
                                 'particle_type': output['particle_probs'].argmax().item(),
-                                'target_vertex': output['vertex_probs'].argmax().item()
+                                'target_vertex': target_vertex
                             }
                         else:
+                            # SAFETY: Check for valid probabilities before sampling
+                            def safe_multinomial(probs, num_samples=1):
+                                """Safely sample from probability distribution"""
+                                # Handle nan/inf
+                                if torch.any(torch.isnan(probs)) or torch.any(torch.isinf(probs)):
+                                    probs = torch.where(torch.isnan(probs) | torch.isinf(probs),
+                                                       torch.zeros_like(probs), probs)
+                                # Handle all zeros
+                                if probs.sum() == 0:
+                                    probs = torch.ones_like(probs) / len(probs)
+                                else:
+                                    probs = probs / probs.sum()  # Renormalize
+                                # Handle negative values
+                                probs = torch.clamp(probs, min=0)
+                                if probs.sum() == 0:
+                                    probs = torch.ones_like(probs) / len(probs)
+                                else:
+                                    probs = probs / probs.sum()
+                                return torch.multinomial(probs, num_samples)
+                            
+                            vertex_idx = safe_multinomial(output['vertex_probs'], 1).item()
+                            # Use target_vertex_probs and mask out source vertex
+                            target_probs = output['target_vertex_probs'].clone()
+                            target_probs[vertex_idx] = 0
+                            if target_probs.sum() > 0:
+                                target_probs = target_probs / target_probs.sum()
+                                target_vertex = safe_multinomial(target_probs, 1).item()
+                            else:
+                                target_vertex = (vertex_idx + 1) % len(target_probs)
+                            
                             action = {
-                                'action_type': torch.multinomial(output['action_type_probs'], 1).item(),
-                                'vertex_idx': torch.multinomial(output['vertex_probs'], 1).item(),
-                                'particle_type': torch.multinomial(output['particle_probs'], 1).item(),
-                                'target_vertex': torch.multinomial(output['vertex_probs'], 1).item()
+                                'action_type': safe_multinomial(output['action_type_probs'], 1).item(),
+                                'vertex_idx': vertex_idx,
+                                'particle_type': safe_multinomial(output['particle_probs'], 1).item(),
+                                'target_vertex': target_vertex
                             }
 
                         value = output['value'].item()
@@ -347,10 +419,12 @@ class PPOTrainer:
                             print(f"  ⚠️  TERMINATE prob: {probs[3]:.4f} (should be < 0.01 with -5.0 bias)")
                             print(f"Chosen: {action_names[action['action_type']]} | Value: {value:.3f}")
 
+                        # Compute log_prob including target_vertex
                         action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
                         vertex_log_prob = torch.log(output['vertex_probs'][action['vertex_idx']] + 1e-8)
                         particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
-                        log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
+                        target_vertex_log_prob = torch.log(target_probs[action['target_vertex']] + 1e-8)
+                        log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob + target_vertex_log_prob).item()
 
                         # DEBUG: Track action types
                         action_type_counts[action['action_type']] += 1
@@ -362,31 +436,76 @@ class PPOTrainer:
                 except Exception as e:
                     # Fallback to sequential processing if batching fails
                     print(f"⚠️  Batch processing failed, falling back to sequential: {e}")
+                    
+                    # Define safe_multinomial helper for fallback path
+                    def safe_multinomial_fallback(probs, num_samples=1):
+                        """Safely sample from probability distribution"""
+                        if torch.any(torch.isnan(probs)) or torch.any(torch.isinf(probs)):
+                            probs = torch.where(torch.isnan(probs) | torch.isinf(probs),
+                                               torch.zeros_like(probs), probs)
+                        if probs.sum() == 0:
+                            probs = torch.ones_like(probs) / len(probs)
+                        else:
+                            probs = probs / probs.sum()
+                        probs = torch.clamp(probs, min=0)
+                        if probs.sum() == 0:
+                            probs = torch.ones_like(probs) / len(probs)
+                        else:
+                            probs = probs / probs.sum()
+                        return torch.multinomial(probs, num_samples)
+                    
                     for env_idx in range(self.num_envs):
                         state_device = states[env_idx].to(self.device, non_blocking=True)
-                        output = self.model(state_device, vertex_states_batch[env_idx], return_value=True)
+                        
+                        # ACTION MASKING: Convert masks to tensors
+                        action_masks_np = action_masks_batch[env_idx]
+                        action_masks = {k: torch.from_numpy(v).to(self.device) for k, v in action_masks_np.items()}
+                        
+                        output = self.model(state_device, vertex_states_batch[env_idx], return_value=True, action_masks=action_masks)
 
                         if deterministic:
+                            # Use target_vertex_probs from the dedicated target head
+                            vertex_idx = output['vertex_probs'].argmax().item()
+                            target_probs = output['target_vertex_probs'].clone()
+                            target_probs[vertex_idx] = 0
+                            if target_probs.sum() > 0:
+                                target_probs = target_probs / target_probs.sum()
+                                target_vertex = target_probs.argmax().item()
+                            else:
+                                target_vertex = 0
+                            
                             action = {
                                 'action_type': output['action_type_probs'].argmax().item(),
-                                'vertex_idx': output['vertex_probs'].argmax().item(),
+                                'vertex_idx': vertex_idx,
                                 'particle_type': output['particle_probs'].argmax().item(),
-                                'target_vertex': output['vertex_probs'].argmax().item()
+                                'target_vertex': target_vertex
                             }
                         else:
+                            # Use target_vertex_probs from the dedicated target head
+                            vertex_idx = safe_multinomial_fallback(output['vertex_probs'], 1).item()
+                            target_probs = output['target_vertex_probs'].clone()
+                            target_probs[vertex_idx] = 0
+                            if target_probs.sum() > 0:
+                                target_probs = target_probs / target_probs.sum()
+                                target_vertex = safe_multinomial_fallback(target_probs, 1).item()
+                            else:
+                                target_vertex = (vertex_idx + 1) % len(target_probs)
+                            
                             action = {
-                                'action_type': torch.multinomial(output['action_type_probs'], 1).item(),
-                                'vertex_idx': torch.multinomial(output['vertex_probs'], 1).item(),
-                                'particle_type': torch.multinomial(output['particle_probs'], 1).item(),
-                                'target_vertex': torch.multinomial(output['vertex_probs'], 1).item()
+                                'action_type': safe_multinomial_fallback(output['action_type_probs'], 1).item(),
+                                'vertex_idx': vertex_idx,
+                                'particle_type': safe_multinomial_fallback(output['particle_probs'], 1).item(),
+                                'target_vertex': target_vertex
                             }
 
                         value = output['value'].item()
 
+                        # Compute log_prob including target_vertex
                         action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
                         vertex_log_prob = torch.log(output['vertex_probs'][action['vertex_idx']] + 1e-8)
                         particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
-                        log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
+                        target_vertex_log_prob = torch.log(target_probs[action['target_vertex']] + 1e-8)
+                        log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob + target_vertex_log_prob).item()
 
                         # DEBUG: Track action types
                         action_type_counts[action['action_type']] += 1
@@ -485,13 +604,14 @@ class PPOTrainer:
             'mean_length': np.mean(episode_lengths) if episode_lengths else 0
         }
     
-    def _process_batched_states(self, batched_state, vertex_states_batch):
+    def _process_batched_states(self, batched_state, vertex_states_batch, action_masks_batch):
         """
         Process a batch of graph states in parallel on GPU
 
         Args:
             batched_state: PyG Batch object containing all graphs
             vertex_states_batch: List of vertex states for each graph
+            action_masks_batch: List of action masks (numpy) for each graph
 
         Returns:
             Dictionary with batched outputs
@@ -505,17 +625,22 @@ class PPOTrainer:
         action_type_probs_list = []
         vertex_probs_list = []
         particle_probs_list = []
+        target_vertex_probs_list = []
         values_list = []
 
         # Split batched graph back into individual graphs
         # PyG Batch stores the batch assignment in batched_state.batch
         graphs = batched_state.to_data_list()
 
-        for i, (graph, vertex_states) in enumerate(zip(graphs, vertex_states_batch)):
-            output = self.model(graph, vertex_states, return_value=True)
+        for i, (graph, vertex_states, action_masks_np) in enumerate(zip(graphs, vertex_states_batch, action_masks_batch)):
+            # ACTION MASKING: Convert numpy masks to torch tensors
+            action_masks = {k: torch.from_numpy(v).to(self.device) for k, v in action_masks_np.items()}
+            
+            output = self.model(graph, vertex_states, return_value=True, action_masks=action_masks)
             action_type_probs_list.append(output['action_type_probs'])
             vertex_probs_list.append(output['vertex_probs'])
             particle_probs_list.append(output['particle_probs'])
+            target_vertex_probs_list.append(output['target_vertex_probs'])
             values_list.append(output['value'])
 
         # Stack results
@@ -523,22 +648,33 @@ class PPOTrainer:
             'action_type_probs': action_type_probs_list,
             'vertex_probs': vertex_probs_list,
             'particle_probs': particle_probs_list,
+            'target_vertex_probs': target_vertex_probs_list,
             'values': values_list
         }
 
     def _extract_vertex_states_from_env(self, env):
-        """从指定环境提取vertex states"""
+        """
+        从指定环境提取vertex states (for parallel envs)
+        统一格式：返回量子数状态，不包含position坐标
+        """
         vertex_states = []
         for vertex in env.vertices:
             connected_edges = [env.edges[eid] for eid in vertex['connected_edges']]
             incoming = [e for e in connected_edges if e['target'] == vertex['id']]
             outgoing = [e for e in connected_edges if e['source'] == vertex['id']]
 
-            vertex_states.append({
-                'incoming': incoming,
-                'outgoing': outgoing,
-                'position': (vertex['x'], vertex['y'])
-            })
+            state = {
+                'charge_in': sum(env._get_charge(e) for e in incoming),
+                'charge_out': sum(env._get_charge(e) for e in outgoing),
+                'lepton_in': sum(env._get_lepton(e) for e in incoming),
+                'lepton_out': sum(env._get_lepton(e) for e in outgoing),
+                'baryon_in': sum(env._get_baryon(e) for e in incoming),
+                'baryon_out': sum(env._get_baryon(e) for e in outgoing),
+                'colors_in': [e['color'] for e in incoming if e['color']],
+                'colors_out': [e['color'] for e in outgoing if e['color']]
+                # REMOVED: 'position' - no longer using canvas coordinates
+            }
+            vertex_states.append(state)
         return vertex_states
     
     def compute_gae(self, rewards: List[float], values: List[float], dones: List[bool]) -> Tuple[np.ndarray, np.ndarray]:

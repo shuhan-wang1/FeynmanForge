@@ -23,13 +23,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate trained Feynman-GCPN model')
     
     # 核心参数
-    parser.add_argument('--checkpoint', type=str, required=True,
+    parser.add_argument('--checkpoint', type=str, default='checkpoints/model_step_51200.pt',
                       help='Path to the model checkpoint (.pt file)')
-    parser.add_argument('--reaction', type=str, default='e+e->mu+mu',
+    parser.add_argument('--reaction', type=str, default='e+e_bar->e+e_bar',
                       help='Reaction to generate (e.g., "e+e->mu+mu" or "e+gamma->e+gamma")')
     
     # 输出设置
-    parser.add_argument('--output', type=str, default='evaluation_result.json',
+    parser.add_argument('--output', type=str, default='evaluation/result.json',
                       help='Output JSON file path')
     parser.add_argument('--deterministic', action='store_true', default=True,
                       help='Use deterministic policy (argmax) for generation')
@@ -57,12 +57,12 @@ def detect_model_config(checkpoint, device):
     state_dict = checkpoint['model_state_dict']
     
     # 1. 推断 hidden_dim (从 node_encoder 权重的输出维度)
-    # encoder.node_encoder.weight shape is [hidden_dim, node_input_dim]
-    if 'encoder.node_encoder.weight' in state_dict:
-        hidden_dim = state_dict['encoder.node_encoder.weight'].shape[0]
+    # encoder.node_encoder.0.weight shape is [hidden_dim, node_input_dim]
+    if 'encoder.node_encoder.0.weight' in state_dict:
+        hidden_dim = state_dict['encoder.node_encoder.0.weight'].shape[0]
     else:
-        print("⚠️ Cannot detect hidden_dim, using default 128")
-        hidden_dim = 128
+        print("⚠️ Cannot detect hidden_dim, using default 768")
+        hidden_dim = 768
         
     # 2. 推断 MPNN 层数 (计算 encoder.mp_layers.X 的最大索引)
     max_layer_idx = -1
@@ -96,8 +96,28 @@ def generate_diagram(model, env, device, deterministic=True, max_steps=50):
     for step in range(max_steps):
         state = state.to(device)
         
-        # 获取动作
-        action = model.get_action(state, deterministic=deterministic)
+        # 获取 action masks 从环境
+        action_masks_np = env.get_action_masks()
+        action_masks = {k: torch.from_numpy(v).to(device) for k, v in action_masks_np.items()}
+        
+        # DEBUG: Print action masks on first step
+        if step == 0:
+            print(f"\n[DEBUG] Action masks on step 0:")
+            print(f"  action_type: {action_masks_np['action_type']}")
+            print(f"  source_vertex shape: {action_masks_np['source_vertex'].shape}")
+            print(f"  target_vertex shape: {action_masks_np['target_vertex'].shape}")
+        
+        # 获取动作（使用 action_masks）
+        action = model.get_action(state, action_masks=action_masks, deterministic=deterministic)
+        
+        # DEBUG: Print action details and probabilities on first few steps
+        if step < 3:
+            with torch.no_grad():
+                output = model.forward(state.to(device), action_masks=action_masks, return_value=False)
+                print(f"[DEBUG Step {step+1}] Selected action: type={action['action_type']}, vertex_idx={action['vertex_idx']}, target_vertex={action['target_vertex']}, particle={action['particle_type']}")
+                print(f"  Source vertex probs: {output['source_vertex_probs'].cpu().numpy()[:6]}")
+                print(f"  Target vertex probs: {output['target_vertex_probs'].cpu().numpy()[:6]}")
+                print(f"  Target vertex masks: {action_masks_np['target_vertex'][:6]}")
         
         # 记录动作
         action_desc = f"{action_names[action['action_type']]} (v{action['vertex_idx']} -> v{action['target_vertex']}, p={action['particle_type']})"
@@ -156,8 +176,8 @@ def main():
     num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
     
     model = FeynmanGCPN(
-        node_input_dim=9,
-        edge_input_dim=21,
+        node_input_dim=7,
+        edge_input_dim=22,
         hidden_dim=hidden_dim,
         num_mp_layers=num_mp_layers,
         num_action_types=5,

@@ -6,7 +6,7 @@ Implements MPNN encoder with Physics-Gated Policy Head
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import MessagePassing, global_mean_pool
+from torch_geometric.nn import MessagePassing, global_mean_pool, global_add_pool
 from torch_geometric.data import Data, Batch
 from typing import Dict, List, Tuple, Optional
 import numpy as np
@@ -23,6 +23,11 @@ class MPNNLayer(MessagePassing):
     def __init__(self, node_dim: int, edge_dim: int, hidden_dim: int):
         super().__init__(aggr='add')  # Use 'add' aggregation
         
+        # Ensure dimensions are explicit and compatible
+        self._node_dim = node_dim  # Renamed to avoid conflict with MessagePassing.node_dim
+        self._edge_dim = edge_dim
+        self._hidden_dim = hidden_dim
+        
         # Message MLP: processes (neighbor_node, edge) -> message
         self.message_mlp = nn.Sequential(
             nn.Linear(node_dim + edge_dim, hidden_dim),
@@ -32,7 +37,9 @@ class MPNNLayer(MessagePassing):
         )
         
         # Update GRU: combines old node state with aggregated message
-        self.gru = nn.GRUCell(hidden_dim, node_dim)
+        # CRITICAL: Both input and hidden must be same dimension
+        assert node_dim == hidden_dim, f"GRU requires node_dim={node_dim} == hidden_dim={hidden_dim}"
+        self.gru = nn.GRUCell(hidden_dim, hidden_dim)
     
     def forward(self, x, edge_index, edge_attr):
         """
@@ -69,8 +76,8 @@ class FeynmanMPNN(nn.Module):
     
     def __init__(
         self,
-        node_input_dim: int = 9,      # [type(3), x, y, num_conn, q_net, l_net, b_net]
-        edge_input_dim: int = 21,     # Particle encoding from ParticleEncoder
+        node_input_dim: int = 7,      # [type(3), num_conn, q_net, l_net, b_net] - removed x, y
+        edge_input_dim: int = 22,     # Particle encoding from ParticleEncoder (now includes is_reverse)
         hidden_dim: int = 128,
         num_layers: int = 3
     ):
@@ -78,9 +85,24 @@ class FeynmanMPNN(nn.Module):
         
         self.hidden_dim = hidden_dim
         
-        # Input projection
-        self.node_encoder = nn.Linear(node_input_dim, hidden_dim)
-        self.edge_encoder = nn.Linear(edge_input_dim, hidden_dim)
+        # FIXED: Use deeper encoders for heterogeneous features
+        # Node features: [type(3), x, y, num_conn, q_net, l_net, b_net] - mixed one-hot and continuous
+        self.node_encoder = nn.Sequential(
+            nn.Linear(node_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        )
+        
+        # Edge features: 21 dimensions with particle properties
+        self.edge_encoder = nn.Sequential(
+            nn.Linear(edge_input_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim)
+        )
         
         # MPNN layers
         self.mp_layers = nn.ModuleList([
@@ -113,11 +135,24 @@ class FeynmanMPNN(nn.Module):
             x_new = mp_layer(x, data.edge_index, edge_attr)
             x = norm(x_new)
         
-        # Global graph embedding (mean pooling)
+        # Global graph embedding
+        # CRITICAL FIX: Use SUM pooling instead of MEAN pooling!
+        # Mean pooling destroys information about graph size:
+        #   - Before: mean([v₀, v₁, v₂, v₃]) 
+        #   - After:  mean([v₀, v₁, v₂, v₃, v₄])
+        #   → Only 20% change even though we added a vertex!
+        # 
+        # Sum pooling preserves size information:
+        #   - Before: sum([v₀, v₁, v₂, v₃]) = 4 * avg
+        #   - After:  sum([v₀, v₁, v₂, v₃, v₄]) = 5 * avg
+        #   → Clear signal that graph grew!
+        #
+        # This is why your value loss was 519.5 (exploded) - the value function
+        # couldn't distinguish between different graph sizes!
         if hasattr(data, 'batch'):
-            graph_emb = global_mean_pool(x, data.batch)
+            graph_emb = global_add_pool(x, data.batch)
         else:
-            graph_emb = x.mean(dim=0, keepdim=True)
+            graph_emb = x.sum(dim=0, keepdim=True)
         
         return x, graph_emb.squeeze(0)
 
@@ -243,6 +278,10 @@ class PhysicsGatedPolicyHead(nn.Module):
         self.num_particle_types = num_particle_types
         self.max_vertices = max_vertices
         
+        # FIXED: Add action type embeddings for hierarchical/conditional policy
+        # This allows vertex selection to be conditioned on action type
+        self.action_type_embed = nn.Embedding(num_action_types, embedding_dim)
+        
         # Neural network policy (before physics gating)
         self.action_type_head = nn.Sequential(
             nn.Linear(embedding_dim, 128),
@@ -250,14 +289,26 @@ class PhysicsGatedPolicyHead(nn.Module):
             nn.Linear(128, num_action_types)
         )
         
-        self.vertex_head = nn.Sequential(
-            nn.Linear(embedding_dim, 128),
+        # CRITICAL FIX: Node-wise scoring (Pointer Network)
+        # Source vertex: "which vertex to modify" (sees each vertex's features!)
+        # Input: [node_emb(H) + graph_emb(H) + action_emb(H)] = 3H
+        # Output: 1 score per node
+        self.source_vertex_head = nn.Sequential(
+            nn.Linear(embedding_dim * 3, 128),  # node + graph + action
             nn.ReLU(),
-            nn.Linear(128, max_vertices)
+            nn.Linear(128, 1)  # Output 1 score per node
         )
         
+        # Target vertex: "which vertex to connect to" (sees each vertex's features!)
+        self.target_vertex_head = nn.Sequential(
+            nn.Linear(embedding_dim * 3, 128),  # node + graph + action
+            nn.ReLU(),
+            nn.Linear(128, 1)  # Output 1 score per node
+        )
+        
+        # Particle head: conditioned on action type AND selected vertex
         self.particle_head = nn.Sequential(
-            nn.Linear(embedding_dim, 128),
+            nn.Linear(embedding_dim * 2, 128),  # graph_emb + action_emb
             nn.ReLU(),
             nn.Linear(128, num_particle_types)
         )
@@ -272,48 +323,113 @@ class PhysicsGatedPolicyHead(nn.Module):
     def forward(
         self,
         graph_embedding: torch.Tensor,
+        node_embeddings: torch.Tensor,  # CRITICAL NEW INPUT: [num_nodes, hidden_dim]
         vertex_states: Optional[List[Dict]] = None,
-        mask_invalid: bool = False,  # Disabled for now - needs proper target vertex indexing
-        num_vertices: Optional[int] = None  # NEW: Actual number of vertices in graph
+        mask_invalid: bool = False,
+        num_vertices: Optional[int] = None,
+        action_masks: Optional[Dict[str, torch.Tensor]] = None  # NEW: Validity masks
     ) -> Dict[str, torch.Tensor]:
         """
-        Forward pass with physics gating
+        CRITICAL FIX: Pointer Network Architecture + Action Masking
+        
+        The model can now "see" individual vertices and their features!
+        Before: Blind - could only guess based on global graph summary
+        After: Has eyes - looks at each vertex's specific features (open edges, type, etc.)
+        
+        Action Masking forces invalid actions to have 0% probability.
 
         Args:
-            graph_embedding: [batch_size, embedding_dim] or [embedding_dim]
-            vertex_states: List of vertex quantum number states (for gate computation)
-            mask_invalid: Whether to apply physics gate (currently disabled)
-            num_vertices: Actual number of vertices in the graph (for masking invalid indices)
+            graph_embedding: [embedding_dim] - Global graph context
+            node_embeddings: [num_nodes, embedding_dim] - PER-VERTEX features!
+            vertex_states: List of vertex quantum number states
+            mask_invalid: Whether to apply physics gate
+            num_vertices: Actual number of vertices in the graph
+            action_masks: Dict with boolean masks for valid actions (keys: action_type, source_vertex, target_vertex, particle_type)
 
         Returns:
             Dictionary with action logits and probabilities
-
-        Note:
-            Physics gate is disabled pending proper implementation of target vertex
-            tracking. The gate needs to know WHICH vertex the action will affect,
-            not just use vertex_states[0] which is always the first initial particle.
         """
-        # Raw neural network outputs
+        # Step 1: Predict action type (global decision is fine)
         action_type_logits = self.action_type_head(graph_embedding)
-        vertex_logits = self.vertex_head(graph_embedding)
-        particle_logits = self.particle_head(graph_embedding)
-
-        # EXPLORATION FIX: Apply VERY strong bias against TERMINATE to force exploration
-        # The model was getting stuck in local minimum of "always terminate immediately"
-        # This bias forces it to explore building diagrams and discover the high rewards
-        # Bias can be annealed over time in training loop if needed
+        
+        # EXPLORATION FIX: Apply bias against TERMINATE
         TERMINATE_ACTION_IDX = 3
-        TERMINATE_BIAS = -5.0  # Reduces TERMINATE probability by ~150x (from 20% -> 0.13%)
+        TERMINATE_BIAS = -5.0
         action_type_logits[..., TERMINATE_ACTION_IDX] = action_type_logits[..., TERMINATE_ACTION_IDX] + TERMINATE_BIAS
-
-        # CRITICAL FIX: Mask invalid vertex indices
-        # vertex_head outputs max_vertices (10) logits, but graph may have fewer vertices
-        # Without masking, 60% of sampled indices are out of bounds -> actions fail!
-        if num_vertices is not None and num_vertices < self.max_vertices:
-            # Create mask: valid indices (0 to num_vertices-1) = 0, invalid = -inf
-            mask = torch.zeros_like(vertex_logits)
-            mask[..., num_vertices:] = float('-inf')
-            vertex_logits = vertex_logits + mask
+        
+        # ACTION MASKING: Set invalid action types to -inf
+        if action_masks is not None and 'action_type' in action_masks:
+            mask = action_masks['action_type']
+            action_type_logits = torch.where(
+                mask,
+                action_type_logits,
+                torch.tensor(float('-inf'), device=action_type_logits.device)
+            )
+        
+        # Step 2: Compute action embedding
+        action_probs_for_emb = F.softmax(action_type_logits, dim=-1)
+        all_action_embs = self.action_type_embed.weight
+        action_emb = (action_probs_for_emb.unsqueeze(-1) * all_action_embs).sum(dim=0)
+        
+        # Step 3: POINTER NETWORK - Score each node individually
+        # Instead of: score = MLP(global)
+        # We do: score_i = MLP(node_i || global || action)
+        
+        num_nodes = node_embeddings.shape[0]
+        
+        # Broadcast global context to all nodes: [num_nodes, embedding_dim]
+        graph_emb_expanded = graph_embedding.unsqueeze(0).expand(num_nodes, -1)
+        action_emb_expanded = action_emb.unsqueeze(0).expand(num_nodes, -1)
+        
+        # Concatenate: [Node_Features || Global_Context || Action_Context]
+        # Shape: [num_nodes, embedding_dim * 3]
+        vertex_input = torch.cat([node_embeddings, graph_emb_expanded, action_emb_expanded], dim=-1)
+        
+        # Score EACH node individually - model can now "see" which vertex has open edges!
+        # Output: [num_nodes, 1] -> squeeze to [num_nodes]
+        source_vertex_logits = self.source_vertex_head(vertex_input).squeeze(-1)
+        target_vertex_logits = self.target_vertex_head(vertex_input).squeeze(-1)
+        
+        # Pad to max_vertices for consistency (if graph has fewer vertices)
+        if num_nodes < self.max_vertices:
+            pad_size = self.max_vertices - num_nodes
+            pad = torch.full((pad_size,), float('-inf'), device=source_vertex_logits.device)
+            source_vertex_logits = torch.cat([source_vertex_logits, pad], dim=0)
+            target_vertex_logits = torch.cat([target_vertex_logits, pad], dim=0)
+        elif num_nodes > self.max_vertices:
+            # Truncate if somehow exceeds max
+            source_vertex_logits = source_vertex_logits[:self.max_vertices]
+            target_vertex_logits = target_vertex_logits[:self.max_vertices]
+        
+        # ACTION MASKING: Apply vertex masks
+        if action_masks is not None:
+            if 'source_vertex' in action_masks:
+                mask = action_masks['source_vertex']
+                source_vertex_logits = torch.where(
+                    mask,
+                    source_vertex_logits,
+                    torch.tensor(float('-inf'), device=source_vertex_logits.device)
+                )
+            if 'target_vertex' in action_masks:
+                mask = action_masks['target_vertex']
+                target_vertex_logits = torch.where(
+                    mask,
+                    target_vertex_logits,
+                    torch.tensor(float('-inf'), device=target_vertex_logits.device)
+                )
+        
+        # Step 4: Particle selection (global context is fine for this)
+        conditioned_input = torch.cat([graph_embedding, action_emb], dim=-1)
+        particle_logits = self.particle_head(conditioned_input)
+        
+        # ACTION MASKING: Apply particle mask
+        if action_masks is not None and 'particle_type' in action_masks:
+            mask = action_masks['particle_type']
+            particle_logits = torch.where(
+                mask,
+                particle_logits,
+                torch.tensor(float('-inf'), device=particle_logits.device)
+            )
 
         # Physics gate currently disabled - would need proper target vertex indexing
         # Future improvement: Pass target_vertex_idx to apply_physics_mask
@@ -325,17 +441,44 @@ class PhysicsGatedPolicyHead(nn.Module):
         #     )
 
         # Softmax to get probabilities
-        action_type_probs = F.softmax(action_type_logits, dim=-1)
-        vertex_probs = F.softmax(vertex_logits, dim=-1)  # Now only valid vertices have non-zero prob
-        particle_probs = F.softmax(particle_logits, dim=-1)
+        # SAFETY: Handle edge case where all logits are -inf (all actions masked)
+        # This can happen if all vertices have no open edges
+        def safe_softmax(logits, dim=-1):
+            """Softmax that handles all-masked case by returning uniform distribution"""
+            # Check if all values are -inf
+            if torch.all(logits == float('-inf')):
+                # Return uniform distribution over all positions
+                return torch.ones_like(logits) / logits.shape[dim]
+            # Check for any inf/nan
+            if torch.any(torch.isnan(logits)) or torch.any(torch.isinf(logits) & (logits > 0)):
+                # Replace nan/+inf with -inf, then handle
+                logits = torch.where(torch.isnan(logits) | (logits == float('inf')), 
+                                    torch.tensor(float('-inf'), device=logits.device), logits)
+                if torch.all(logits == float('-inf')):
+                    return torch.ones_like(logits) / logits.shape[dim]
+            probs = F.softmax(logits, dim=dim)
+            # Final safety check
+            if torch.any(torch.isnan(probs)):
+                return torch.ones_like(probs) / probs.shape[dim]
+            return probs
+        
+        action_type_probs = safe_softmax(action_type_logits, dim=-1)
+        source_vertex_probs = safe_softmax(source_vertex_logits, dim=-1)
+        target_vertex_probs = safe_softmax(target_vertex_logits, dim=-1)
+        particle_probs = safe_softmax(particle_logits, dim=-1)
 
         return {
             'action_type_logits': action_type_logits,
             'action_type_probs': action_type_probs,
-            'vertex_logits': vertex_logits,
-            'vertex_probs': vertex_probs,
+            'source_vertex_logits': source_vertex_logits,
+            'source_vertex_probs': source_vertex_probs,
+            'target_vertex_logits': target_vertex_logits,
+            'target_vertex_probs': target_vertex_probs,
             'particle_logits': particle_logits,
-            'particle_probs': particle_probs
+            'particle_probs': particle_probs,
+            # Keep old keys for backward compatibility during transition
+            'vertex_logits': source_vertex_logits,
+            'vertex_probs': source_vertex_probs
         }
     
     def apply_physics_mask(
@@ -395,12 +538,12 @@ class FeynmanGCPN(nn.Module):
     
     def __init__(
         self,
-        node_input_dim: int = 9,  # Updated from 6 to 9 to match actual node features
-        edge_input_dim: int = 21,
+        node_input_dim: int = 7,  # Updated: removed x, y (canvas bias)
+        edge_input_dim: int = 22,  # Updated from 21 to 22 (added is_reverse flag)
         hidden_dim: int = 128,
         num_mp_layers: int = 3,
         num_action_types: int = 5,  # Updated from 4 to 5 for ACTION_MERGE
-        num_particle_types: int = 20,
+        num_particle_types: int = 18,  # 12 fermions + 6 bosons
         max_vertices: int = 10,
         lambda_penalty: float = 5.0
     ):
@@ -427,7 +570,8 @@ class FeynmanGCPN(nn.Module):
         self,
         data: Data,
         vertex_states: Optional[List[Dict]] = None,
-        return_value: bool = True
+        return_value: bool = True,
+        action_masks: Optional[Dict[str, torch.Tensor]] = None  # NEW: Pass action masks
     ) -> Dict[str, torch.Tensor]:
         """
         Full forward pass
@@ -436,6 +580,7 @@ class FeynmanGCPN(nn.Module):
             data: PyG Data object
             vertex_states: Quantum number states for physics gating
             return_value: Whether to compute value estimate
+            action_masks: Optional validity masks for actions
 
         Returns:
             Dictionary with policy outputs and optionally value
@@ -450,10 +595,14 @@ class FeynmanGCPN(nn.Module):
         num_vertices = data.x.shape[0]
 
         # Policy (with vertex masking)
+        # POINTER NETWORK FIX: Pass node embeddings so policy can see individual vertex features
+        # ACTION MASKING FIX: Pass masks to force invalid actions to 0% probability
         policy_output = self.policy_head(
             graph_embedding,
+            node_embeddings,  # Now policy can distinguish vertices by their features
             vertex_states,
-            num_vertices=num_vertices
+            num_vertices=num_vertices,
+            action_masks=action_masks  # NEW: Apply action masking
         )
 
         output = {
@@ -473,6 +622,7 @@ class FeynmanGCPN(nn.Module):
         self,
         data: Data,
         vertex_states: Optional[List[Dict]] = None,
+        action_masks: Optional[Dict[str, torch.Tensor]] = None,
         deterministic: bool = False
     ) -> Dict[str, int]:
         """
@@ -481,41 +631,43 @@ class FeynmanGCPN(nn.Module):
         Args:
             data: Current state as PyG Data
             vertex_states: For physics gating
+            action_masks: Optional action masks to prevent invalid actions
             deterministic: If True, take argmax; else sample
             
         Returns:
             action: Dictionary with action_type, vertex_idx, particle_type, target_vertex
         """
         with torch.no_grad():
-            output = self.forward(data, vertex_states, return_value=False)
+            output = self.forward(data, vertex_states, return_value=False, action_masks=action_masks)
             
             if deterministic:
                 action_type = output['action_type_probs'].argmax().item()
-                vertex_idx = output['vertex_probs'].argmax().item()
+                vertex_idx = output['source_vertex_probs'].argmax().item()
                 particle_type = output['particle_probs'].argmax().item()
 
-                # For target_vertex, mask out vertex_idx to ensure they're different
-                target_probs = output['vertex_probs'].clone()
+                # Use dedicated target vertex distribution
+                # Mask out the selected source vertex to prevent MERGE(v, v)
+                target_probs = output['target_vertex_probs'].clone()
                 target_probs[vertex_idx] = 0
                 if target_probs.sum() > 0:
                     target_probs = target_probs / target_probs.sum()
                     target_vertex = target_probs.argmax().item()
                 else:
-                    target_vertex = 0  # Fallback
+                    target_vertex = 0
             else:
                 action_type = torch.multinomial(output['action_type_probs'], 1).item()
-                vertex_idx = torch.multinomial(output['vertex_probs'], 1).item()
+                vertex_idx = torch.multinomial(output['source_vertex_probs'], 1).item()
                 particle_type = torch.multinomial(output['particle_probs'], 1).item()
 
-                # CRITICAL FIX: Mask out vertex_idx when sampling target_vertex
-                # This prevents MERGE from trying to merge a vertex with itself
-                target_probs = output['vertex_probs'].clone()
+                # Use dedicated target vertex distribution
+                # Mask out the selected source vertex to prevent MERGE(v, v)
+                target_probs = output['target_vertex_probs'].clone()
                 target_probs[vertex_idx] = 0
                 if target_probs.sum() > 0:
                     target_probs = target_probs / target_probs.sum()
                     target_vertex = torch.multinomial(target_probs, 1).item()
                 else:
-                    target_vertex = (vertex_idx + 1) % len(target_probs)  # Fallback
+                    target_vertex = (vertex_idx + 1) % len(target_probs)
         
         return {
             'action_type': action_type,
@@ -550,9 +702,9 @@ class FeynmanGCPN(nn.Module):
         vertex_log_prob = torch.log(output['vertex_probs'][actions['vertex_idx']] + 1e-8)
         particle_log_prob = torch.log(output['particle_probs'][actions['particle_type']] + 1e-8)
 
-        # CRITICAL FIX: Compute target_vertex log prob using masked distribution
+        # Use target_vertex_probs from the dedicated target head
         # Mask out vertex_idx to match the sampling procedure
-        target_probs = output['vertex_probs'].clone()
+        target_probs = output['target_vertex_probs'].clone()
         target_probs[actions['vertex_idx']] = 0
         if target_probs.sum() > 0:
             target_probs = target_probs / target_probs.sum()

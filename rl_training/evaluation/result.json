@@ -1,5 +1,5 @@
 {
-  "timestamp": "2025-11-23T20:55:08.237895",
+  "timestamp": "2025-11-24T21:22:52.553801",
   "shapes": [
     {
       "id": 0,
@@ -9,8 +9,8 @@
         "y": 200.0
       },
       "p2": {
-        "x": 180,
-        "y": 250.0
+        "x": 80.0,
+        "y": 300.0
       },
       "props": {
         "particleId": "e",
@@ -24,16 +24,16 @@
       "id": 1,
       "type": "fermion",
       "p1": {
+        "x": 80.0,
+        "y": 300.0
+      },
+      "p2": {
         "x": 80,
         "y": 400.0
       },
-      "p2": {
-        "x": 180,
-        "y": 450.0
-      },
       "props": {
         "particleId": "e",
-        "isAnti": false,
+        "isAnti": true,
         "color": null,
         "category": "fermion",
         "group": "lepton"
@@ -51,7 +51,7 @@
         "y": 200.0
       },
       "props": {
-        "particleId": "mu",
+        "particleId": "e",
         "isAnti": false,
         "color": null,
         "category": "fermion",
@@ -62,15 +62,34 @@
       "id": 3,
       "type": "fermion",
       "p1": {
-        "x": 0,
-        "y": 300
-      },
-      "p2": {
         "x": 720,
         "y": 400.0
       },
+      "p2": {
+        "x": 0,
+        "y": 300
+      },
       "props": {
-        "particleId": "mu",
+        "particleId": "e",
+        "isAnti": true,
+        "color": null,
+        "category": "fermion",
+        "group": "lepton"
+      }
+    },
+    {
+      "id": 4,
+      "type": "fermion",
+      "p1": {
+        "x": 80.0,
+        "y": 300.0
+      },
+      "p2": {
+        "x": 180.0,
+        "y": 350.0
+      },
+      "props": {
+        "particleId": "tau",
         "isAnti": false,
         "color": null,
         "category": "fermion",
@@ -79,606 +98,606 @@
     }
   ],
   "metadata": {
-    "reward": -50.499999999999986,
-    "reaction": "e+e->mu+mu",
+    "reward": -35.90000000000001,
+    "reaction": "e+e_bar->e+e_bar",
     "actions": [
       {
         "step": 1,
         "action": {
-          "action_type": 2,
+          "action_type": 4,
           "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "particle_type": 2,
+          "target_vertex": 0
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
-        "reward": -1.01,
-        "success": false
+        "desc": "MERGE (v1 -> v0, p=2)",
+        "reward": 13.59,
+        "success": true
       },
       {
         "step": 2,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 3,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 4,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 5,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 6,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 7,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 8,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 9,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 10,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 11,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 12,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 13,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 14,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 15,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 16,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 17,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 18,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 19,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 20,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 21,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 22,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 23,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 24,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 25,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 26,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 27,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 28,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 29,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 30,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 31,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 32,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 33,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 34,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 35,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 36,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 37,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 38,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 39,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 40,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 41,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 42,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 43,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 44,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 45,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 46,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 47,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 48,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 49,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       },
       {
         "step": 50,
         "action": {
-          "action_type": 2,
-          "vertex_idx": 1,
-          "particle_type": 9,
-          "target_vertex": 2
+          "action_type": 4,
+          "vertex_idx": 4,
+          "particle_type": 2,
+          "target_vertex": 1
         },
-        "desc": "SET_TYPE (v1 -> v2, p=9)",
+        "desc": "MERGE (v4 -> v1, p=2)",
         "reward": -1.01,
         "success": false
       }

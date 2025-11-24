@@ -5,9 +5,10 @@
       "e_bar"
     ],
     "final": [
-      "photon"
+      "e",
+      "e_bar"
     ],
-    "latex": "$e + e_bar \\to photon$"
+    "latex": "$e + e_bar \\to e + e_bar$"
   },
   "visualization": {
     "canvas_width": 800,

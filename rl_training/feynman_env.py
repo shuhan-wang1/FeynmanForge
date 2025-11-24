@@ -199,14 +199,14 @@ class FeynmanDiagramEnv(gym.Env):
         # DEBUG: Log actions for first 20 steps only (reduced spam)
         if self.step_count <= 20:
             print(f"[ENV Step {self.step_count}] Action: {action_names[action_type]}, vertex_idx={action.get('vertex_idx', 'N/A')}, num_vertices={len(self.vertices)}")
-
+        
         if action_type == self.ACTION_TERMINATE:
-            # FORCE: Cannot terminate in first 5 steps
-            if self.step_count < 2:
+            # FORCE: Cannot terminate in first 5 steps - give model time to build structure
+            if self.step_count < 5:
                 reward += self.reward_weights['invalid_action']  # Treat as invalid action
                 action_record['success'] = False
-                if self.step_count < 2:
-                    print(f"  ⚠️  TERMINATE rejected (step {self.step_count} < 2)")
+                if self.step_count <= 20:
+                    print(f"  ⚠️  TERMINATE rejected (step {self.step_count} < 5)")
             else:
                 self.terminated = True
                 action_record['success'] = True
@@ -857,6 +857,67 @@ class FeynmanDiagramEnv(gym.Env):
                     return False
         return True
     
+    def get_action_masks(self) -> Dict[str, np.ndarray]:
+        """
+        Generate validity masks for all actions to prevent invalid moves.
+        
+        Returns:
+            Dictionary with masks for:
+            - action_type: [5] bool array (CONNECT, BRANCH, SET_TYPE, TERMINATE, MERGE)
+            - source_vertex: [max_vertices] bool array
+            - target_vertex: [max_vertices] bool array
+            - particle_type: [num_particle_types] bool array
+        """
+        num_vertices = len(self.vertices)
+        max_vertices = 10  # Should match model's max_vertices
+        # FIXED: Dynamically calculate num_particle_types to match model
+        num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
+        
+        # Action type mask
+        action_type_mask = np.ones(5, dtype=bool)
+        
+        # Cannot TERMINATE in first 2 steps
+        if self.step_count < 2:
+            action_type_mask[self.ACTION_TERMINATE] = False
+        
+        # Vertex masks (initialize all False, then enable valid ones)
+        source_vertex_mask = np.zeros(max_vertices, dtype=bool)
+        target_vertex_mask = np.zeros(max_vertices, dtype=bool)
+        
+        # Enable existing vertices as potential sources
+        source_vertex_mask[:num_vertices] = True
+        
+        # For target vertex, depends on action type (but we compute general mask)
+        # CONNECT: Can connect to any other vertex (not self)
+        # MERGE: Can merge any two vertices
+        target_vertex_mask[:num_vertices] = True
+        
+        # Particle type mask (all particles valid by default)
+        particle_type_mask = np.ones(num_particle_types, dtype=bool)
+        
+        # Advanced masking based on graph state:
+        # 1. Cannot CONNECT/BRANCH from vertices with no open edges
+        for v_idx, vertex in enumerate(self.vertices):
+            open_edges = [e for e_id in vertex['connected_edges'] 
+                         for e in [self.edges[e_id]] if e['state'] == 'open']
+            if len(open_edges) == 0:
+                source_vertex_mask[v_idx] = False
+        
+        # 2. Cannot BRANCH from final state vertices
+        for v_idx, vertex in enumerate(self.vertices):
+            if vertex['type'] == 'final':
+                # Still can be used as source for MERGE
+                # But would fail for BRANCH - we'd need action-conditional masks
+                # For now, allow it and rely on physics validation
+                pass
+        
+        return {
+            'action_type': action_type_mask,
+            'source_vertex': source_vertex_mask,
+            'target_vertex': target_vertex_mask,
+            'particle_type': particle_type_mask
+        }
+    
     def _get_observation(self) -> Data:
         """
         Build PyG Data object from current diagram state
@@ -872,8 +933,8 @@ class FeynmanDiagramEnv(gym.Env):
             elif v['type'] == 'final': type_vec[1] = 1
             elif v['type'] == 'interaction': type_vec[2] = 1
 
-            x_norm = v['x'] / self.canvas_width
-            y_norm = v['y'] / self.canvas_height
+            # REMOVED: x_norm, y_norm (canvas position bias)
+            # Feynman diagrams are topological - position shouldn't matter!
             num_conn = len(v['connected_edges'])
 
             q_net = 0.0; l_net = 0.0; b_net = 0.0
@@ -886,18 +947,28 @@ class FeynmanDiagramEnv(gym.Env):
                 l_net += sign * self._get_lepton(edge)
                 b_net += sign * self._get_baryon(edge)
 
-            node_features.append(type_vec + [x_norm, y_norm, num_conn, q_net, l_net, b_net])
+            # Node features: [type(3), num_conn(1), q_net(1), l_net(1), b_net(1)] = 7 features
+            node_features.append(type_vec + [num_conn, q_net, l_net, b_net])
 
         edge_index = []
         edge_features = []
 
         # Add connected edges (internal propagators)
+        # BIDIRECTIONAL FIX: Add both forward and reverse edges for message passing
         for edge in self.edges:
             if edge['state'] == 'consumed': continue
             if edge['source'] is not None and edge['target'] is not None:
+                # Forward edge (time flows downstream)
                 edge_index.append([edge['source'], edge['target']])
                 edge_features.append(ParticleEncoder.encode_particle(
-                    edge['particle_id'], edge['is_anti'], edge['color']
+                    edge['particle_id'], edge['is_anti'], edge['color'], is_reverse=False
+                ))
+                
+                # Reverse edge (information flows upstream)
+                # This allows initial particles to "see" what they're connected to
+                edge_index.append([edge['target'], edge['source']])
+                edge_features.append(ParticleEncoder.encode_particle(
+                    edge['particle_id'], edge['is_anti'], edge['color'], is_reverse=True
                 ))
 
         # CRITICAL FIX: Add self-loops for external edges (initial/final particles)
@@ -910,14 +981,14 @@ class FeynmanDiagramEnv(gym.Env):
                     vertex_id = edge['source']
                     edge_index.append([vertex_id, vertex_id])  # Self-loop
                     edge_features.append(ParticleEncoder.encode_particle(
-                        edge['particle_id'], edge['is_anti'], edge['color']
+                        edge['particle_id'], edge['is_anti'], edge['color'], is_reverse=False
                     ))
                 # External edge with only target (final particle coming in)
                 elif edge['source'] is None and edge['target'] is not None:
                     vertex_id = edge['target']
                     edge_index.append([vertex_id, vertex_id])  # Self-loop
                     edge_features.append(ParticleEncoder.encode_particle(
-                        edge['particle_id'], edge['is_anti'], edge['color']
+                        edge['particle_id'], edge['is_anti'], edge['color'], is_reverse=False
                     ))
 
         x = torch.tensor(np.array(node_features, dtype=np.float32), dtype=torch.float32)
@@ -929,7 +1000,8 @@ class FeynmanDiagramEnv(gym.Env):
             edge_index_list = [[i, i] for i in range(len(self.vertices))]
             edge_index_tensor = torch.tensor(edge_index_list, dtype=torch.long).t().contiguous()
             # Use small random features instead of zeros (helps MPNN initialization)
-            edge_attr = torch.randn((len(self.vertices), 21), dtype=torch.float32) * 0.01
+            # Updated to 22 features to match bidirectional edge encoding
+            edge_attr = torch.randn((len(self.vertices), 22), dtype=torch.float32) * 0.01
 
         return Data(x=x, edge_index=edge_index_tensor, edge_attr=edge_attr)
 
