@@ -1,0 +1,20 @@
+{
+  "reaction": {
+    "initial": [
+      "e",
+      "e_bar"
+    ],
+    "final": [
+      "photon"
+    ],
+    "latex": "$e + e_bar \\to photon$"
+  },
+  "visualization": {
+    "canvas_width": 800,
+    "canvas_height": 600,
+    "initial_x": 80,
+    "final_x": 720,
+    "auto_refresh": true,
+    "refresh_interval": 2000
+  }
+}

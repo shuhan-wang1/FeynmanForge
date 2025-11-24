@@ -836,9 +836,40 @@ class PPOTrainer:
             num_final = len(env_ref.final_particles)
             y_step = 100
             
+            # Helper function to classify particle type correctly
+            def get_particle_props(p_id):
+                """Determine if particle is fermion or boson and get shape type"""
+                base_id = p_id[:-4] if p_id.endswith('_bar') else p_id
+                is_anti = p_id.endswith('_bar')
+                
+                # Check if fermion (lepton or quark)
+                p = PhysicsConstants.get_particle_by_id(base_id)
+                if p:
+                    return 'fermion', 'fermion', base_id, is_anti
+                
+                # Check if boson
+                b = PhysicsConstants.get_boson_by_id(base_id)
+                if b:
+                    # Determine boson shape type for visualization
+                    if base_id == 'photon':
+                        shape_type = 'photon'
+                    elif base_id in ['w_plus', 'w_minus']:
+                        shape_type = 'boson_w'
+                    elif base_id == 'z':
+                        shape_type = 'boson_z'
+                    elif base_id == 'gluon':
+                        shape_type = 'gluon'
+                    elif base_id == 'higgs':
+                        shape_type = 'higgs'
+                    else:
+                        shape_type = 'boson'
+                    return shape_type, 'boson', base_id, is_anti
+                
+                # Unknown - default to fermion
+                return 'fermion', 'fermion', base_id, is_anti
+            
             for i, p_id in enumerate(env_ref.initial_particles):
-                # 解析反粒子后缀 _bar
-                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
+                shape_type, category, base_id, is_anti = get_particle_props(p_id)
                 
                 # 反粒子需要从右往左绘制
                 if is_anti:
@@ -848,21 +879,20 @@ class PPOTrainer:
                 
                 current_diagram.append({
                     'id': f'initial_{i}',
-                    'type': 'fermion',
+                    'type': shape_type,  # FIXED: Use detected type
                     'p1': p1,
                     'p2': p2,
                     'props': {
                         'particleId': base_id,
                         'isAnti': is_anti,
                         'color': 'none',
-                        'category': 'fermion',
+                        'category': category,  # FIXED: Use detected category
                         'group': 'initial'
                     }
                 })
             
             for i, p_id in enumerate(env_ref.final_particles):
-                # 解析反粒子后缀 _bar
-                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
+                shape_type, category, base_id, is_anti = get_particle_props(p_id)
                 
                 # 反粒子需要从右往左绘制
                 if is_anti:
@@ -872,14 +902,14 @@ class PPOTrainer:
                 
                 current_diagram.append({
                     'id': f'final_{i}',
-                    'type': 'fermion',
+                    'type': shape_type,  # FIXED: Use detected type
                     'p1': p1,
                     'p2': p2,
                     'props': {
                         'particleId': base_id,
                         'isAnti': is_anti,
                         'color': 'none',
-                        'category': 'fermion',
+                        'category': category,  # FIXED: Use detected category
                         'group': 'final'
                     }
                 })

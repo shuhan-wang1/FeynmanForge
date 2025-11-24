@@ -502,12 +502,33 @@ class FeynmanDiagramEnv(gym.Env):
         v1 = self.vertices[vertex_idx1]
         v2 = self.vertices[vertex_idx2]
 
-        # CRITICAL: Initial/final vertices can CONNECT but cannot be MODIFIED
-        # They can participate in merges (to create interaction vertices)
-        # but their external particles must remain unchanged
-        # For now, we allow merging initial/final vertices since that's how
-        # we build annihilation topologies (e+ + e- meet at interaction point)
-        # But we need to ensure external particles are preserved
+        # ===== PHYSICS CONSTRAINT: Prevent invalid merges =====
+        # CRITICAL: Cannot merge two FINAL state vertices!
+        # This creates broken topology where final particles disappear
+        # Example: For e⁺e⁻→μ⁺μ⁻, merging μ⁺+μ⁻ makes no physical sense
+        if v1['type'] == 'final' and v2['type'] == 'final':
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: Cannot merge two FINAL state vertices (breaks target topology!)")
+            return False
+        
+        # For annihilation reactions, guide model toward correct topology:
+        # - initial + initial → good (e⁺ + e⁻ annihilate)
+        # - initial + interaction → good (building complex diagrams)
+        # - interaction + interaction → good (internal vertex merging)
+        # - initial + final → questionable (usually wrong physics)
+        # - final + anything except initial → reject
+        if v1['type'] == 'initial' or v2['type'] == 'initial':
+            # At least one is initial - good for annihilation
+            pass
+        elif v1['type'] == 'interaction' and v2['type'] == 'interaction':
+            # Both internal vertices - allow for complex diagrams
+            pass
+        else:
+            # One is final (and other is not initial) - reject
+            if self.step_count <= 10:
+                print(f"  ✗ FAIL: MERGE must involve initial states or both be internal vertices!")
+            return False
+        # ===== END PHYSICS CONSTRAINT =====
 
         # Get open half-lines from both vertices
         v1_open = self._get_open_halflines(vertex_idx1)
