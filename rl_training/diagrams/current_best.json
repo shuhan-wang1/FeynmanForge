@@ -1,93 +1,78 @@
-{
-  "timestamp": "2025-11-22T14:16:04.370746",
-  "metadata": {
-    "episode": 0,
-    "reward": 0.0,
-    "initial_state": [
-      "mu",
-      "mu_bar"
-    ],
-    "final_state": [
-      "e",
-      "e_bar"
-    ]
-  },
-  "shapes": [
-    {
-      "id": "initial_0",
-      "type": "fermion",
-      "p1": {
-        "x": 50,
-        "y": 200
-      },
-      "p2": {
-        "x": 150,
-        "y": 200
-      },
-      "props": {
-        "particleId": "mu",
-        "isAnti": false,
-        "color": "none",
-        "category": "fermion",
-        "group": "initial"
-      }
+[
+  {
+    "id": 0,
+    "type": "fermion",
+    "p1": {
+      "x": 80,
+      "y": 200.0
     },
-    {
-      "id": "initial_1",
-      "type": "fermion",
-      "p1": {
-        "x": 150,
-        "y": 300
-      },
-      "p2": {
-        "x": 50,
-        "y": 300
-      },
-      "props": {
-        "particleId": "mu",
-        "isAnti": true,
-        "color": "none",
-        "category": "fermion",
-        "group": "initial"
-      }
+    "p2": {
+      "x": 180,
+      "y": 250.0
     },
-    {
-      "id": "final_0",
-      "type": "fermion",
-      "p1": {
-        "x": 650,
-        "y": 200
-      },
-      "p2": {
-        "x": 750,
-        "y": 200
-      },
-      "props": {
-        "particleId": "e",
-        "isAnti": false,
-        "color": "none",
-        "category": "fermion",
-        "group": "final"
-      }
-    },
-    {
-      "id": "final_1",
-      "type": "fermion",
-      "p1": {
-        "x": 750,
-        "y": 300
-      },
-      "p2": {
-        "x": 650,
-        "y": 300
-      },
-      "props": {
-        "particleId": "e",
-        "isAnti": true,
-        "color": "none",
-        "category": "fermion",
-        "group": "final"
-      }
+    "props": {
+      "particleId": "e",
+      "isAnti": false,
+      "color": null,
+      "category": "fermion",
+      "group": "lepton"
     }
-  ]
-}
+  },
+  {
+    "id": 1,
+    "type": "fermion",
+    "p1": {
+      "x": 400.0,
+      "y": 300.0
+    },
+    "p2": {
+      "x": 80,
+      "y": 400.0
+    },
+    "props": {
+      "particleId": "e",
+      "isAnti": true,
+      "color": null,
+      "category": "fermion",
+      "group": "lepton"
+    }
+  },
+  {
+    "id": 2,
+    "type": "photon",
+    "p1": {
+      "x": 400.0,
+      "y": 300.0
+    },
+    "p2": {
+      "x": 720,
+      "y": 200.0
+    },
+    "props": {
+      "particleId": "photon",
+      "isAnti": false,
+      "color": null,
+      "category": "boson",
+      "group": "photon"
+    }
+  },
+  {
+    "id": 3,
+    "type": "fermion",
+    "p1": {
+      "x": 400.0,
+      "y": 300.0
+    },
+    "p2": {
+      "x": 500.0,
+      "y": 350.0
+    },
+    "props": {
+      "particleId": "s",
+      "isAnti": false,
+      "color": null,
+      "category": "fermion",
+      "group": "quark_d"
+    }
+  }
+]

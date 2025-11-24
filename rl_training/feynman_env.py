@@ -68,12 +68,12 @@ class FeynmanDiagramEnv(gym.Env):
             'successful_connection': 5.0,      # INCREASED from 2.0 - encourage connections
             'vertex_created': 3.0,             # INCREASED from 1.0 - encourage building
             'conservation_bonus': 5.0,         # INCREASED from 2.0 - reward physics correctness
-            'complexity_penalty': -0.1,
-            'step_penalty': -0.02,             # CHANGED from 0.0 - tiny penalty to prefer efficiency
-            'invalid_action': -0.2,            # REDUCED from -0.5 - less harsh on exploration
+            'complexity_penalty': -0.001,
+            'step_penalty': -0.01,             # CHANGED from -0.0002 - stronger efficiency incentive
+            'invalid_action': -1.0,            # INCREASED from -0.2 - make exploration costly but not catastrophic
             'progress_reward': 2.0,            # NEW - reward incremental progress
-            'exploration_bonus': 0.5,          # NEW - reward trying new things
-            'early_termination_penalty': -50.0, # NEW - much harsher than exploring
+            'exploration_bonus': 5,          # NEW - reward trying new things
+            'early_termination_penalty': -20.0, # CRITICAL FIX: Reduced from -500.0 (was catastrophically harsh!)
         }
         
         self.num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
@@ -201,18 +201,23 @@ class FeynmanDiagramEnv(gym.Env):
             print(f"[ENV Step {self.step_count}] Action: {action_names[action_type]}, vertex_idx={action.get('vertex_idx', 'N/A')}, num_vertices={len(self.vertices)}")
 
         if action_type == self.ACTION_TERMINATE:
-            self.terminated = True
-            action_record['success'] = True  # TERMINATE always succeeds
-            num_internal_edges = sum(1 for e in self.edges if not e['is_external'])
-            is_connected = self._is_graph_connected()
-
-            # HARSH penalty for terminating too early (before making real progress)
-            if self.step_count < 3:
-                reward += self.reward_weights['early_termination_penalty']
-            elif num_internal_edges < 1 or not is_connected:
-                reward -= 40.0  # INCREASED from 20.0 - penalize lazy termination
+            # FORCE: Cannot terminate in first 5 steps
+            if self.step_count < 2:
+                reward += self.reward_weights['invalid_action']  # Treat as invalid action
+                action_record['success'] = False
+                if self.step_count < 2:
+                    print(f"  ⚠️  TERMINATE rejected (step {self.step_count} < 2)")
             else:
-                reward += self._compute_terminal_reward()
+                self.terminated = True
+                action_record['success'] = True
+                num_internal_edges = sum(1 for e in self.edges if not e['is_external'])
+                is_connected = self._is_graph_connected()
+
+                # Penalty for terminating without proper structure
+                if num_internal_edges < 1 or not is_connected:
+                    reward -= 40.0  # Penalize lazy termination
+                else:
+                    reward += self._compute_terminal_reward()
 
         elif action_type == self.ACTION_CONNECT:
             success = self._execute_connect(action['vertex_idx'], action['target_vertex'])

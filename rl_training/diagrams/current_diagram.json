@@ -1,16 +1,16 @@
 {
-  "timestamp": "2025-11-22T14:16:04.370746",
+  "timestamp": "2025-11-24T00:17:28.391659",
   "metadata": {
-    "episode": 0,
+    "episode": 19,
     "reward": 0.0,
     "initial_state": [
-      "mu",
-      "mu_bar"
-    ],
-    "final_state": [
       "e",
       "e_bar"
-    ]
+    ],
+    "final_state": [
+      "photon"
+    ],
+    "num_steps": 0
   },
   "shapes": [
     {
@@ -25,7 +25,7 @@
         "y": 200
       },
       "props": {
-        "particleId": "mu",
+        "particleId": "e",
         "isAnti": false,
         "color": "none",
         "category": "fermion",
@@ -44,7 +44,7 @@
         "y": 300
       },
       "props": {
-        "particleId": "mu",
+        "particleId": "e",
         "isAnti": true,
         "color": "none",
         "category": "fermion",
@@ -63,31 +63,13 @@
         "y": 200
       },
       "props": {
-        "particleId": "e",
+        "particleId": "photon",
         "isAnti": false,
         "color": "none",
         "category": "fermion",
         "group": "final"
       }
-    },
-    {
-      "id": "final_1",
-      "type": "fermion",
-      "p1": {
-        "x": 750,
-        "y": 300
-      },
-      "p2": {
-        "x": 650,
-        "y": 300
-      },
-      "props": {
-        "particleId": "e",
-        "isAnti": true,
-        "color": "none",
-        "category": "fermion",
-        "group": "final"
-      }
     }
-  ]
+  ],
+  "actions": []
 }

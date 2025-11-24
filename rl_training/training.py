@@ -425,15 +425,18 @@ class PPOTrainer:
                     
                     # 检查并更新最佳奖励
                     if current_reward > self.best_reward:
+                        print(f"\n🏆 NEW BEST REWARD: {current_reward:.2f} (previous: {self.best_reward:.2f})")
+                        print(f"   Environment {env_idx}, Global step {self.global_step}, Episode length: {episode_lengths_per_env[env_idx]}")
                         self.best_reward = current_reward
                         # 从对应的环境中获取最佳图结构
                         try:
                             self.best_diagram = self.env.envs[env_idx].get_diagram_json()
                             # 立即保存最佳图
                             self._save_best_diagram()
+                            print(f"   ✅ Best diagram saved to diagrams/current_best.json!")
                         except Exception as e:
                             # 如果无法访问，至少更新数值
-                            pass
+                            print(f"   ⚠️  Failed to save best diagram: {e}")
                     
                     # 定期更新可视化 (只用第0个环境的数据)
                     if env_idx == 0:
@@ -896,9 +899,8 @@ class PPOTrainer:
         with open('diagrams/current_diagram.json', 'w', encoding='utf-8') as f:
             json.dump(diagram_data, f, indent=2, ensure_ascii=False)
         
-        # 同时保存到current_best.json以便可视化显示
-        with open('diagrams/current_best.json', 'w', encoding='utf-8') as f:
-            json.dump(diagram_data, f, indent=2, ensure_ascii=False)
+        # FIXED: DO NOT overwrite current_best.json here!
+        # current_best.json should ONLY be updated by _save_best_diagram()
     
     def _extract_vertex_states(self) -> List[Dict]:
         """

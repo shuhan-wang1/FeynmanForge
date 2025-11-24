@@ -23,7 +23,7 @@ import argparse
 def parse_args():
     parser = argparse.ArgumentParser(description='Train Feynman-GCPN')
     
-    parser.add_argument('--reaction', type=str, default='e+e->mu+mu',
+    parser.add_argument('--reaction', type=str, default='e+e_bar>mu+mu_bar',
                       help='Reaction to train on (format: particle1+particle2->particle3+particle4)')
     parser.add_argument('--timesteps', type=int, default=100000,
                       help='Total training timesteps')
@@ -49,7 +49,7 @@ def parse_args():
 
 def parse_reaction(reaction_str):
     """
-    Parse reaction string like 'e+e->mu+mu' into initial and final states
+    Parse reaction string like 'e+e_bar->mu_bar+mu' into initial and final states
     """
     if '->' not in reaction_str:
         raise ValueError("Reaction must contain '->' separator")
@@ -86,7 +86,12 @@ def main():
         return
     
     # Validate particles (支持反粒子 _bar 后缀)
-    all_particles = [p.id for p in PhysicsConstants.get_all_particles()]
+    # === FIXED: Include both fermions AND bosons ===
+    fermions = [p.id for p in PhysicsConstants.get_all_particles()]
+    bosons = list(PhysicsConstants.BOSONS.keys())
+    all_particles = fermions + bosons
+    # === End of fix ===
+    
     for p in initial_state + final_state:
         # 移除 _bar 后缀进行验证
         p_base = p.replace('_bar', '') if p.endswith('_bar') else p
@@ -105,6 +110,7 @@ def main():
     print(f"   Creating {num_parallel_envs} parallel environments...")
 
     # 创建并行环境包装器
+    # 生成并行环境，每个环境都进行一次独立的训练
     env = make_parallel_envs(
         num_envs=num_parallel_envs,
         initial_state=initial_state,
