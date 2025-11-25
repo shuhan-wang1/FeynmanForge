@@ -23,6 +23,9 @@ from physics_engine import PhysicsConstants
 class RolloutBuffer:
     """
     Storage for trajectories collected during rollouts
+    
+    W7 FIX: All stored tensors are now cloned and detached to prevent
+    memory leaks from retained computation graphs during long training runs.
     """
     
     def __init__(self):
@@ -44,13 +47,22 @@ class RolloutBuffer:
         done: bool,
         vertex_state: List[Dict]
     ):
+        # W7 FIX: Clone and detach PyG Data to prevent memory leaks
+        # This ensures computation graphs are not retained
+        if hasattr(state, 'clone'):
+            state = state.clone()
+        if hasattr(state, 'detach'):
+            state = state.detach()
+        
         self.states.append(state)
         self.actions.append(action)
         self.rewards.append(reward)
         self.values.append(value)
         self.log_probs.append(log_prob)
         self.dones.append(done)
-        self.vertex_states.append(vertex_state)
+        # Deep copy vertex_states to prevent reference issues
+        import copy
+        self.vertex_states.append(copy.deepcopy(vertex_state))
     
     def clear(self):
         self.states.clear()

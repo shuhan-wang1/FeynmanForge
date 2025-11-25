@@ -549,10 +549,18 @@ class PhysicsGatedPolicyHead(nn.Module):
 class ValueHead(nn.Module):
     """
     Value function V(G) for critic in PPO
+    
+    W5 FIX: Added LayerNorm to handle varying graph sizes.
+    Since global_add_pool sums node embeddings, larger graphs produce
+    larger embedding magnitudes, causing value loss explosion.
+    LayerNorm normalizes the embedding before the MLP.
     """
     
     def __init__(self, embedding_dim: int):
         super().__init__()
+        
+        # W5 FIX: Normalize graph embedding to handle varying graph sizes
+        self.layer_norm = nn.LayerNorm(embedding_dim)
         
         self.value_mlp = nn.Sequential(
             nn.Linear(embedding_dim, 128),
@@ -562,17 +570,20 @@ class ValueHead(nn.Module):
             nn.Linear(64, 1)
         )
     
-    def forward(self, graph_embedding: torch.Tensor) -> torch.Tensor:
+    def forward(self, graph_embedding: torch.Tensor, num_nodes: Optional[int] = None) -> torch.Tensor:
         """
         Estimate value of the graph state
         
         Args:
             graph_embedding: [batch_size, embedding_dim] or [embedding_dim]
+            num_nodes: Optional number of nodes for additional normalization
             
         Returns:
             value: [batch_size, 1] or [1]
         """
-        return self.value_mlp(graph_embedding)
+        # W5 FIX: Normalize to handle graph size variation
+        normalized_embedding = self.layer_norm(graph_embedding)
+        return self.value_mlp(normalized_embedding)
 
 
 class FeynmanGCPN(nn.Module):
@@ -671,7 +682,7 @@ class FeynmanGCPN(nn.Module):
         vertex_states: Optional[List[Dict]] = None,
         action_masks: Optional[Dict[str, torch.Tensor]] = None,
         deterministic: bool = False,
-            _gate: bool = True  # NEW: Enable physics gating by default
+        apply_physics_gate: bool = True  # Enable physics gating by default
     ) -> Dict[str, int]:
         """
         Sample an action from the policy

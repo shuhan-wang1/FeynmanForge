@@ -56,24 +56,58 @@ class FeynmanDiagramEnv(gym.Env):
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        # Reward weights - OPTIMIZED for better exploration
+        # W3 FIX: Reward weights with principled design rationale
+        # 
+        # Design Principles:
+        # 1. GOAL REWARDS (50-20): Large positive rewards for achieving the main objective
+        #    - target_match (50.0): Highest reward - this IS the goal
+        #    - topology_valid (20.0): Second highest - valid topology is prerequisite
+        #
+        # 2. PROGRESS REWARDS (2-5): Medium rewards to shape learning trajectory
+        #    - successful_connection (5.0): ~10% of goal, encourages building
+        #    - vertex_created (3.0): Encourages graph construction
+        #    - conservation_bonus (5.0): Rewards physics-correct actions
+        #    - progress_reward (2.0): Incremental progress towards goal
+        #    - exploration_bonus (5.0): Encourages trying new configurations
+        #
+        # 3. VIOLATION PENALTIES (-0.5 to -1.0): Small penalties for physics violations
+        #    - Kept small to allow exploration while learning
+        #    - Color violation (-1.0) slightly higher as QCD is strict
+        #
+        # 4. EFFICIENCY PENALTIES (-0.01 to -1.0): Prevent degenerate behavior
+        #    - step_penalty (-0.01): Small per-step cost, ~0.5 over 50 steps
+        #    - invalid_action (-1.0): Discourage invalid moves but allow recovery
+        #    - early_termination_penalty (-20.0): Prevent premature termination
+        #      Note: Reduced from -500.0 which caused gradient explosion
+        #
+        # 5. COMPLEXITY PENALTY (-0.001): Minimal penalty for extra vertices
+        #    - Prevents unnecessarily complex diagrams
+        #    - Very small to not discourage valid complexity
+        #
         self.reward_weights = reward_weights or {
+            # Goal rewards (highest magnitude)
+            'target_match': 50.0,              # Main objective
+            'topology_valid': 20.0,            # Valid diagram structure
+            
+            # Progress rewards (medium magnitude)
+            'successful_connection': 5.0,      # Encourage building connections
+            'vertex_created': 3.0,             # Encourage graph construction
+            'conservation_bonus': 5.0,         # Reward physics correctness
+            'progress_reward': 2.0,            # Incremental progress
+            'exploration_bonus': 5.0,          # Encourage diverse actions
+            
+            # Physics violation penalties (small magnitude)
             'charge_violation': -0.5,
             'lepton_violation': -0.5,
             'baryon_violation': -0.5,
-            'color_violation': -1.0,
+            'color_violation': -1.0,           # QCD is strict
             'interaction_violation': -0.5,
-            'target_match': 50.0,              # INCREASED from 20.0 - major success!
-            'topology_valid': 20.0,            # INCREASED from 10.0
-            'successful_connection': 5.0,      # INCREASED from 2.0 - encourage connections
-            'vertex_created': 3.0,             # INCREASED from 1.0 - encourage building
-            'conservation_bonus': 5.0,         # INCREASED from 2.0 - reward physics correctness
-            'complexity_penalty': -0.001,
-            'step_penalty': -0.01,             # CHANGED from -0.0002 - stronger efficiency incentive
-            'invalid_action': -1.0,            # INCREASED from -0.2 - make exploration costly but not catastrophic
-            'progress_reward': 2.0,            # NEW - reward incremental progress
-            'exploration_bonus': 5,          # NEW - reward trying new things
-            'early_termination_penalty': -20.0, # CRITICAL FIX: Reduced from -500.0 (was catastrophically harsh!)
+            
+            # Efficiency penalties
+            'step_penalty': -0.01,             # Per-step cost
+            'invalid_action': -1.0,            # Discourage but allow recovery
+            'early_termination_penalty': -20.0, # Prevent premature TERMINATE
+            'complexity_penalty': -0.001,       # Minimal penalty for extra vertices
         }
         
         self.num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
@@ -752,6 +786,9 @@ class FeynmanDiagramEnv(gym.Env):
 
         This prevents diagrams like mu+mu_bar->e+e_bar+neutrino which conserve
         charge locally at each vertex but violate global lepton number conservation.
+        
+        W4 FIX: Also verifies that the actual particle types in the diagram
+        match the target reaction, not just the quantum numbers.
 
         Returns:
             True if all global conservation laws are satisfied
@@ -800,7 +837,73 @@ class FeynmanDiagramEnv(gym.Env):
 
         if initial_count != expected_initial or final_count != expected_final:
             return False
+        
+        # W4 FIX: Verify particle types match the target reaction
+        # This catches cases like e+e->e+e+photon which would conserve
+        # quantum numbers but doesn't match the target e+e->mu+mu
+        if not self._verify_particle_types_match():
+            return False
 
+        return True
+    
+    def _verify_particle_types_match(self) -> bool:
+        """
+        W4 FIX: Verify that the actual particles in the diagram match the target reaction.
+        
+        This ensures that a diagram for e+e->mu+mu doesn't accidentally produce
+        e+e->e+e which would pass quantum number conservation checks.
+        
+        Returns:
+            True if particle types match the target reaction
+        """
+        # Helper to parse particle string (handle _bar suffix)
+        def parse_particle(p_str):
+            if p_str.endswith('_bar'):
+                return p_str[:-4], True
+            return p_str, False
+        
+        # Get expected initial particles
+        expected_initial = []
+        for p_str in self.initial_particles:
+            pid, is_anti = parse_particle(p_str)
+            expected_initial.append((pid, is_anti))
+        
+        # Get expected final particles  
+        expected_final = []
+        for p_str in self.final_particles:
+            pid, is_anti = parse_particle(p_str)
+            expected_final.append((pid, is_anti))
+        
+        # Get actual initial particles from diagram
+        actual_initial = []
+        for v in self.vertices:
+            if v['type'] == 'initial':
+                for edge_id in v['connected_edges']:
+                    edge = self.edges[edge_id]
+                    if edge['is_external']:
+                        actual_initial.append((edge['particle_id'], edge['is_anti']))
+        
+        # Get actual final particles from diagram
+        actual_final = []
+        for v in self.vertices:
+            if v['type'] == 'final':
+                for edge_id in v['connected_edges']:
+                    edge = self.edges[edge_id]
+                    if edge['is_external']:
+                        actual_final.append((edge['particle_id'], edge['is_anti']))
+        
+        # Sort both lists for comparison (order doesn't matter for particle matching)
+        expected_initial_sorted = sorted(expected_initial)
+        actual_initial_sorted = sorted(actual_initial)
+        expected_final_sorted = sorted(expected_final)
+        actual_final_sorted = sorted(actual_final)
+        
+        # Compare
+        if expected_initial_sorted != actual_initial_sorted:
+            return False
+        if expected_final_sorted != actual_final_sorted:
+            return False
+        
         return True
 
     def _check_external_match(self, target_particles: List[str], vertex_type: str) -> bool:
