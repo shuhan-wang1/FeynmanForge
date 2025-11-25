@@ -484,19 +484,66 @@ class PhysicsGatedPolicyHead(nn.Module):
     def apply_physics_mask(
         self,
         particle_logits: torch.Tensor,
-        vertex_states: List[Dict],
+        target_vertex_state: Dict,
         particle_list: List[str]
     ) -> torch.Tensor:
         """
-        DISABLED: Was suppressing valid actions due to hardcoded vertex[0] check.
-        Returns raw logits without physics masking.
+        Apply physics gate to particle selection logits.
         
-        The original implementation incorrectly assumed vertex_states[0] was the
-        target vertex, but vertex[0] is typically the initial state particle which
-        has different conservation requirements (source node with no incoming edges).
-        This caused the physics gate to incorrectly suppress valid particle selections.
+        For each candidate particle, compute conservation violation and apply
+        exponential penalty: Γ(particle) = exp(-λ Σ w_k (Δ_k)²)
+        
+        The gated logits become: logits' = logits + log(Γ(particle))
+        This is equivalent to: p' ∝ p * Γ(particle) after softmax
+        
+        Args:
+            particle_logits: [num_particle_types] - Raw logits from particle_head
+            target_vertex_state: Dict with quantum numbers at the target vertex
+            particle_list: List of particle IDs
+            
+        Returns:
+            gated_logits: [num_particle_types] - Logits with physics penalties
         """
-        return particle_logits
+        if target_vertex_state is None:
+            return particle_logits
+            
+        device = particle_logits.device
+        num_particles = len(particle_list)
+        
+        # Compute gate value for each particle
+        gate_values = torch.ones(num_particles, device=device)
+        
+        for i, particle_id in enumerate(particle_list):
+            # Try both normal and anti versions, take max gate value
+            # (model should be allowed to choose anti-particle if it conserves better)
+            mismatch_normal = self.physics_gate.compute_mismatch(
+                action_type=0,  # Connect - most common
+                vertex_state=target_vertex_state,
+                candidate_particle=particle_id,
+                is_anti=False
+            )
+            gate_normal = self.physics_gate(mismatch_normal)
+            
+            mismatch_anti = self.physics_gate.compute_mismatch(
+                action_type=0,
+                vertex_state=target_vertex_state,
+                candidate_particle=particle_id,
+                is_anti=True
+            )
+            gate_anti = self.physics_gate(mismatch_anti)
+            
+            # Use the better gate value (less penalty)
+            gate_values[i] = torch.max(gate_normal, gate_anti)
+        
+        # Convert gate values to log-space penalties
+        # log(Γ) ranges from 0 (perfect conservation) to -inf (large violation)
+        # Clamp to avoid -inf
+        log_gates = torch.log(gate_values.clamp(min=1e-10))
+        
+        # Apply to logits: logits' = logits + log(Γ)
+        gated_logits = particle_logits + log_gates
+        
+        return gated_logits
 
 
 class ValueHead(nn.Module):
@@ -623,7 +670,8 @@ class FeynmanGCPN(nn.Module):
         data: Data,
         vertex_states: Optional[List[Dict]] = None,
         action_masks: Optional[Dict[str, torch.Tensor]] = None,
-        deterministic: bool = False
+        deterministic: bool = False,
+            _gate: bool = True  # NEW: Enable physics gating by default
     ) -> Dict[str, int]:
         """
         Sample an action from the policy
@@ -633,6 +681,7 @@ class FeynmanGCPN(nn.Module):
             vertex_states: For physics gating
             action_masks: Optional action masks to prevent invalid actions
             deterministic: If True, take argmax; else sample
+            apply_physics_gate: Whether to apply physics gate to particle selection
             
         Returns:
             action: Dictionary with action_type, vertex_idx, particle_type, target_vertex
@@ -640,10 +689,18 @@ class FeynmanGCPN(nn.Module):
         with torch.no_grad():
             output = self.forward(data, vertex_states, return_value=False, action_masks=action_masks)
             
+            def safe_multinomial(probs):
+                """Safely sample from probability distribution, handling nan/inf"""
+                if torch.any(torch.isnan(probs)) or torch.any(torch.isinf(probs)):
+                    probs = torch.ones_like(probs) / probs.numel()
+                if probs.sum() == 0:
+                    probs = torch.ones_like(probs) / probs.numel()
+                probs = probs / probs.sum()  # Renormalize
+                return torch.multinomial(probs, 1).item()
+            
             if deterministic:
                 action_type = output['action_type_probs'].argmax().item()
                 vertex_idx = output['source_vertex_probs'].argmax().item()
-                particle_type = output['particle_probs'].argmax().item()
 
                 # Use dedicated target vertex distribution
                 # Mask out the selected source vertex to prevent MERGE(v, v)
@@ -654,10 +711,20 @@ class FeynmanGCPN(nn.Module):
                     target_vertex = target_probs.argmax().item()
                 else:
                     target_vertex = 0
+                
+                # Apply physics gate to particle selection AFTER knowing target vertex
+                particle_logits = output['particle_logits'].clone()
+                if apply_physics_gate and vertex_states is not None and target_vertex < len(vertex_states):
+                    particle_logits = self.policy_head.apply_physics_mask(
+                        particle_logits,
+                        vertex_states[target_vertex],
+                        self.policy_head.particle_list
+                    )
+                particle_probs = F.softmax(particle_logits, dim=-1)
+                particle_type = particle_probs.argmax().item()
             else:
-                action_type = torch.multinomial(output['action_type_probs'], 1).item()
-                vertex_idx = torch.multinomial(output['source_vertex_probs'], 1).item()
-                particle_type = torch.multinomial(output['particle_probs'], 1).item()
+                action_type = safe_multinomial(output['action_type_probs'])
+                vertex_idx = safe_multinomial(output['source_vertex_probs'])
 
                 # Use dedicated target vertex distribution
                 # Mask out the selected source vertex to prevent MERGE(v, v)
@@ -665,9 +732,23 @@ class FeynmanGCPN(nn.Module):
                 target_probs[vertex_idx] = 0
                 if target_probs.sum() > 0:
                     target_probs = target_probs / target_probs.sum()
-                    target_vertex = torch.multinomial(target_probs, 1).item()
+                    target_vertex = safe_multinomial(target_probs)
                 else:
                     target_vertex = (vertex_idx + 1) % len(target_probs)
+                
+                # Apply physics gate to particle selection AFTER knowing target vertex
+                particle_logits = output['particle_logits'].clone()
+                if apply_physics_gate and vertex_states is not None and target_vertex < len(vertex_states):
+                    particle_logits = self.policy_head.apply_physics_mask(
+                        particle_logits,
+                        vertex_states[target_vertex],
+                        self.policy_head.particle_list
+                    )
+                particle_probs = F.softmax(particle_logits, dim=-1)
+                # Handle potential nan from physics gate
+                if torch.any(torch.isnan(particle_probs)):
+                    particle_probs = torch.ones_like(particle_probs) / particle_probs.numel()
+                particle_type = safe_multinomial(particle_probs)
         
         return {
             'action_type': action_type,

@@ -719,6 +719,8 @@ class PPOTrainer:
         if len(data['rewards']) == 0:
             return {}
         
+        print(f"\n[PPO Update] Processing {len(data['rewards'])} transitions...")
+        
         # Compute advantages
         advantages, returns = self.compute_gae(
             data['rewards'],
@@ -742,13 +744,20 @@ class PPOTrainer:
         
         # Mini-batch updates
         indices = np.arange(len(data['rewards']))
+        num_batches = (len(indices) + self.batch_size - 1) // self.batch_size
         
         for epoch in range(self.epochs_per_update):
             np.random.shuffle(indices)
+            batch_count = 0
             
             for start in range(0, len(indices), self.batch_size):
                 end = start + self.batch_size
                 batch_idx = indices[start:end]
+                batch_count += 1
+                
+                # Progress indicator every 10 batches
+                if batch_count % 10 == 0 or batch_count == 1:
+                    print(f"  Epoch {epoch+1}/{self.epochs_per_update}, Batch {batch_count}/{num_batches}", end='\r')
                 
                 # Batch data (use non_blocking for GPU transfer)
                 batch_states = [data['states'][i].to(self.device, non_blocking=True) for i in batch_idx]
@@ -807,6 +816,8 @@ class PPOTrainer:
                 total_value_loss += value_loss.item()
                 total_entropy += -entropy_loss.item()
                 num_updates += 1
+        
+        print(f"  PPO Update complete! ({num_updates} mini-batches)           ")
         
         # Clear buffer
         self.buffer.clear()

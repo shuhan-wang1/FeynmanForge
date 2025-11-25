@@ -25,7 +25,7 @@ def parse_args():
     
     parser.add_argument('--reaction', type=str, default='e+e_bar>mu+mu_bar',
                       help='Reaction to train on (format: particle1+particle2->particle3+particle4)')
-    parser.add_argument('--timesteps', type=int, default=100000,
+    parser.add_argument('--timesteps', type=int, default=30000,
                       help='Total training timesteps')
     parser.add_argument('--hidden-dim', type=int, default=128,
                       help='Hidden dimension size')
@@ -105,8 +105,10 @@ def main():
     print("\n📦 Setting up environment...")
     
     # 使用并行环境充分利用 CPU 多核
-    # OPTIMIZED: Increased from 256 to 512 for better CPU utilization
-    num_parallel_envs = 512 if device.type == 'cuda' else 128
+    # OPTIMIZED: Reduced from 512 to 128 for faster PPO updates
+    # 512 envs * 50 steps = 25600 samples per rollout = VERY SLOW PPO update
+    # 128 envs * 50 steps = 6400 samples per rollout = Reasonable
+    num_parallel_envs = 128 if device.type == 'cuda' else 64
     print(f"   Creating {num_parallel_envs} parallel environments...")
 
     # 创建并行环境包装器
@@ -205,13 +207,12 @@ def main():
     print("⚙️  Configuring PPO trainer...")
 
     # Use optimized batch size for GPU and parallel envs
-    # OPTIMIZED: Increased batch size from 512 to 2048 for better GPU utilization
-    # batch_size 应该是 num_parallel_envs 的倍数
-    batch_size = 2048 if device.type == 'cuda' else 128
+    # OPTIMIZED: Reduced batch size for faster updates
+    batch_size = 512 if device.type == 'cuda' else 64
     # FIX: rollout_steps should be enough for each env to complete multiple episodes
-    # With 512 parallel envs, we want each env to run at least 50 steps per rollout
-    # Total transitions per rollout = rollout_steps (after the fix in training.py)
-    rollout_steps = 2048 if device.type == 'cuda' else 256  # Minimum steps per env
+    # With 128 parallel envs, we want each env to run at least 50 steps per rollout
+    # Total transitions per rollout = 128 * 50 = 6400 (reasonable for PPO update)
+    rollout_steps = 1024 if device.type == 'cuda' else 256  # Minimum steps per env
 
     # Adjust entropy coefficient based on whether using pretrained model
     # Lower entropy when using pretrained model to exploit learned behavior
@@ -264,8 +265,8 @@ def main():
     trainer.train(
         total_timesteps=args.timesteps,
         rollout_steps=rollout_steps,
-        log_interval=10,
-        save_interval=10,
+        log_interval=5,   # Log every 5 updates
+        save_interval=5,  # Save checkpoint every 5 updates (more frequent!)
         checkpoint_dir=args.checkpoint_dir,
         log_dir=args.log_dir
     )
