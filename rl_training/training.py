@@ -585,8 +585,9 @@ class PPOTrainer:
             
             states = next_states
 
-        # DEBUG: Print action type distribution
-        if self.global_step < 1000 or self.global_step % 500 == 0:
+        # DEBUG: Print action type distribution (less frequently for speed)
+        # Only print every 2000 steps to reduce overhead
+        if self.global_step == 0 or self.global_step % 2000 == 0:
             action_names = ['CONNECT', 'BRANCH', 'SET_TYPE', 'TERMINATE', 'MERGE']
             total_actions = sum(action_type_counts)
             print(f"\n{'='*80}")
@@ -731,7 +732,7 @@ class PPOTrainer:
         if len(data['rewards']) == 0:
             return {}
         
-        print(f"\n[PPO Update] Processing {len(data['rewards'])} transitions...")
+        print(f"[PPO Update] {len(data['rewards'])} samples, {self.epochs_per_update} epochs, batch={self.batch_size}")
         
         # Compute advantages
         advantages, returns = self.compute_gae(
@@ -760,16 +761,10 @@ class PPOTrainer:
         
         for epoch in range(self.epochs_per_update):
             np.random.shuffle(indices)
-            batch_count = 0
             
             for start in range(0, len(indices), self.batch_size):
                 end = start + self.batch_size
                 batch_idx = indices[start:end]
-                batch_count += 1
-                
-                # Progress indicator every 10 batches
-                if batch_count % 10 == 0 or batch_count == 1:
-                    print(f"  Epoch {epoch+1}/{self.epochs_per_update}, Batch {batch_count}/{num_batches}", end='\r')
                 
                 # Batch data (use non_blocking for GPU transfer)
                 batch_states = [data['states'][i].to(self.device, non_blocking=True) for i in batch_idx]
@@ -828,8 +823,6 @@ class PPOTrainer:
                 total_value_loss += value_loss.item()
                 total_entropy += -entropy_loss.item()
                 num_updates += 1
-        
-        print(f"  PPO Update complete! ({num_updates} mini-batches)           ")
         
         # Clear buffer
         self.buffer.clear()

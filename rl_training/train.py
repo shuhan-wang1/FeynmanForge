@@ -104,11 +104,10 @@ def main():
     # Create environment
     print("\n📦 Setting up environment...")
     
-    # 使用并行环境充分利用 CPU 多核
-    # OPTIMIZED: Reduced from 512 to 128 for faster PPO updates
-    # 512 envs * 50 steps = 25600 samples per rollout = VERY SLOW PPO update
-    # 128 envs * 50 steps = 6400 samples per rollout = Reasonable
-    num_parallel_envs = 128 if device.type == 'cuda' else 64
+    # SPEED OPTIMIZATION: Use 256 parallel envs for faster rollout collection
+    # Each env runs independently, so more envs = faster data collection
+    # 256 envs * 50 steps = 12800 samples per rollout
+    num_parallel_envs = 256 if device.type == 'cuda' else 64
     print(f"   Creating {num_parallel_envs} parallel environments...")
 
     # 创建并行环境包装器
@@ -206,13 +205,10 @@ def main():
     # Create trainer
     print("⚙️  Configuring PPO trainer...")
 
-    # Use optimized batch size for GPU and parallel envs
-    # OPTIMIZED: Reduced batch size for faster updates
-    batch_size = 512 if device.type == 'cuda' else 64
-    # FIX: rollout_steps should be enough for each env to complete multiple episodes
-    # With 128 parallel envs, we want each env to run at least 50 steps per rollout
-    # Total transitions per rollout = 128 * 50 = 6400 (reasonable for PPO update)
-    rollout_steps = 1024 if device.type == 'cuda' else 256  # Minimum steps per env
+    # SPEED OPTIMIZATION: Larger batch size = fewer batches = faster update
+    batch_size = 2048 if device.type == 'cuda' else 256
+    # Rollout steps per collection cycle
+    rollout_steps = 2048 if device.type == 'cuda' else 512
 
     # Adjust entropy coefficient based on whether using pretrained model
     # Lower entropy when using pretrained model to exploit learned behavior
@@ -227,14 +223,14 @@ def main():
         env=env,
         model=model,
         device=device,
-        learning_rate=2e-4,
+        learning_rate=3e-4,  # Slightly higher LR for faster learning
         gamma=0.99,
         gae_lambda=0.95,
         clip_epsilon=0.2,
         value_coef=0.5,
         entropy_coef=entropy_coef,  # Adjusted based on pretrained flag
         batch_size=batch_size,
-        epochs_per_update=6,  # OPTIMIZED: Increased from 4 to 6 for better learning
+        epochs_per_update=3,  # SPEED: Reduced from 6 to 3 for faster updates
         num_envs=num_parallel_envs,
         use_amp=True  # Enable mixed precision training
     )
@@ -249,7 +245,7 @@ def main():
     print(f"   Parallel environments: {num_parallel_envs}")
     print(f"   Batch size: {batch_size}")
     print(f"   Rollout steps: {rollout_steps}")
-    print(f"   PPO epochs per update: 4")
+    print(f"   PPO epochs per update: 3")
     print(f"   Checkpoints will be saved to: {args.checkpoint_dir}")
     print(f"   TensorBoard logs: {args.log_dir}")
     print(f"   Training monitor: Open training_viz.html in your browser")
