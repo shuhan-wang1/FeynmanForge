@@ -6,412 +6,145 @@ A complete implementation of **Feynman-GCPN** (Graph Convolutional Policy Networ
 
 This project implements a **physics-informed RL agent** that:
 
-1. **Constructs Feynman diagrams step-by-step** as sequential graph operations
-2. **Enforces conservation laws** (charge, lepton number, baryon number, color charge) through a differentiable **Physics Gate**
-3. **Learns valid particle interactions** purely from environment rewards, without hard-coded rules
-4. **Visualizes results** in real-time using the existing JavaScript Feynman Forge frontend
+1.  **Constructs Feynman diagrams step-by-step** as sequential graph operations
+2.  **Enforces conservation laws** (charge, lepton number, baryon number, color charge) through a differentiable **Physics Gate**
+3.  **Learns valid particle interactions** purely from environment rewards, without hard-coded rules
+4.  **Discovers hidden conservation laws** (e.g., Baryon number) using a semi-supervised approach (V8 architecture)
 
 ## 📁 Project Structure
 
 ```
 rl_training/
-├── physics_engine.py          # Particle database & conservation law validators
-├── feynman_env.py             # Gymnasium environment (MDP formulation)
-├── models.py                  # MPNN encoder + Physics-Gated Policy Head
-├── training.py                # PPO training loop
-├── visualization_bridge.py    # Export diagrams to JSON for JS visualization
-├── requirements.txt           # Python dependencies
-└── README.md                  # This file
-
-diagrams/                      # Output directory for generated diagrams
-checkpoints/                   # Saved model weights
-logs/                          # TensorBoard logs
-training_viz.html              # Real-time training monitor
+├── run_experiment.py          # Main entry point for training and evaluation
+├── config.py                  # Configuration and hyperparameters
+├── models_v8.py               # Neural networks (Split Embedding, Physics Gate)
+├── env_v8.py                  # Environment wrapper with hybrid rewards
+├── trainer_v8.py              # PPO training loop
+├── evaluator_v8.py            # Evaluation and analysis tools
+├── particle_utils.py          # Particle database & utilities
+├── physics_engine.py          # Core physics logic & conservation laws
+├── feynman_env.py             # Base Gymnasium environment
+└── requirements.txt           # Python dependencies
 ```
 
-## 🔬 Methodology
+## 🔬 Methodology: Conservation Law Discovery (V8)
 
-### State Representation
-The Feynman diagram is represented as a **heterogeneous Directed Acyclic Graph (DAG)**:
-- **Vertices**: Interaction points (initial/final/interaction)
-- **Edges**: Particle propagators with quantum numbers (charge, lepton, baryon, color, spin)
+This project implements a semi-supervised Reinforcement Learning framework designed to **rediscover** physics laws (specifically Baryon Number conservation) while learning to construct valid Feynman diagrams.
 
-Encoded as PyTorch Geometric `Data` objects for neural network processing.
+### 1. Problem Formulation (MDP)
 
-### Action Space
-Hierarchical discrete actions:
-- `Connect(u, v)`: Connect two vertices with a propagator
-- `Branch(u)`: Create a new vertex from an open line (e.g., e⁻ → e⁻ + γ)
-- `SetType(e, p)`: Assign particle identity to an edge
-- `Terminate()`: End diagram construction
+The Feynman diagram construction is modeled as a Markov Decision Process:
 
-### Physics-Gated Policy Head ⭐
+-   **State ($S_t$)**: A heterogeneous Directed Acyclic Graph (DAG) where nodes are interaction vertices and edges are particle propagators.
+    -   *Representation*: PyTorch Geometric `Data` object + 12-dimensional summary vector (vertex counts, connectivity status, open lines).
+-   **Action Space ($A$)**: Hierarchical discrete actions:
+    1.  **Action Type**: `CONNECT`, `BRANCH` (1$\to$2), `MERGE` (2$\to$1), `SET_TYPE`, `TERMINATE`.
+    2.  **Vertex Selection**: Pointer Network selects which vertex to modify.
+    3.  **Particle Selection**: Chooses particle identity (e.g., $e^-, \gamma, u, d$).
+-   **Reward ($R$)**: Hybrid "Scientist Reward" (see below).
 
-The **critical innovation**: A differentiable physics gate that masks invalid actions.
+### 2. Neural Architecture (V8)
 
-For each candidate action $a$, compute the **conservation mismatch vector**:
+The core innovation is the **Split-Embedding Physics-Gated Network**:
 
-$$\Delta(a) = \begin{bmatrix}
-|Q_{\text{in}} - Q_{\text{out}}| \\
-|L_{\text{in}} - L_{\text{out}}| \\
-|B_{\text{in}} - B_{\text{out}}| \\
-\text{ColorMismatch}(a)
-\end{bmatrix}$$
+#### A. Split Particle Embedding (PQNE)
+We split the particle embedding $E(p)$ into two components:
+$$ E(p) = [ E_{\text{fixed}}(p) \oplus E_{\text{learnable}}(p) ] $$
+-   **Fixed Part**: Encodes **known** quantum numbers (Charge $Q$, Lepton Number $L$). These are frozen.
+-   **Learnable Part**: Randomly initialized. The model must learn to encode **unknown** properties (like Baryon Number $B$) in these dimensions to satisfy conservation constraints.
 
-Then apply the **Physics Gate**:
+#### B. Split Conservation Mask (CLDM)
+We learn a conservation confidence mask $\alpha \in [0, 1]^D$:
+$$ \alpha = [ \alpha_{\text{fixed}} \oplus \alpha_{\text{learnable}} ] $$
+-   $\alpha_{\text{fixed}} \approx 1.0$: We tell the model "Charge and Lepton number MUST be conserved".
+-   $\alpha_{\text{learnable}}$: The model learns which of its new dimensions *should* be conserved.
 
-$$\Gamma(a) = \exp\left( -\lambda \sum_{k} w_k \cdot (\Delta_k)^2 \right)$$
-
+#### C. Meta-Physics Gate
+A differentiable gate modulates the policy output $\pi(a)$ based on conservation laws:
+$$ \Gamma(a) = \exp\left( -\lambda \sum_{k} \alpha_k \cdot (\Delta_k(a))^2 \right) $$
+where $\Delta_k(a)$ is the conservation mismatch (e.g., $\sum Q_{in} - \sum Q_{out}$) for action $a$.
 The final policy is:
+$$ \pi'(a|s) \propto \pi_\theta(a|s) \cdot \Gamma(a) $$
 
-$$\pi(a|G_t) = \frac{\pi_\theta(a|G_t) \cdot \Gamma(a)}{\sum_{a'} \pi_\theta(a'|G_t) \cdot \Gamma(a')}$$
+### 3. Training Strategy: "The Scientist Reward"
 
-This ensures the agent **cannot** select actions that blatantly violate conservation laws, dramatically accelerating learning.
+We use a semi-supervised reward structure to simulate scientific discovery:
 
-### Reward Function
+| Regime | Physics Laws | Feedback Type | Reward Function |
+|--------|-------------|---------------|-----------------|
+| **Known** | Charge ($Q$), Lepton ($L$) | **Immediate** | $+2.0$ per valid vertex, $-2.0$ per violation |
+| **Unknown** | Baryon ($B$) | **Sparse** | $0.0$ immediate. Only $+50.0$ if *entire* diagram is valid at the end. |
 
-**Step Reward** (Local conservation):
-$$r_{\text{step}} = -\alpha \sum_{v} (|\Delta Q_v| + |\Delta L_v| + |\Delta B_v| + \delta_{\text{color}})$$
+**Discovery Mechanism**:
+1.  The **Physics Gate** forces the model to respect $Q$ and $L$ immediately.
+2.  To get the global $+50.0$ reward, the model *must* also satisfy Baryon conservation (which is checked at the end).
+3.  Since it receives no vertex-level feedback for $B$, it must **self-organize** its $E_{\text{learnable}}$ space to align with $B$ conservation, effectively "discovering" the law.
 
-**Terminal Reward** (Global topology):
-$$r_{\text{final}} = r_{\text{target}} + r_{\text{topo}} + r_{\text{complexity}}$$
+## ⚙️ Experimental Setup
 
-- $r_{\text{target}}$: +10 if external lines match $I \to F$, else -10
-- $r_{\text{topo}}$: +5 if fully connected with no dangling lines
-- $r_{\text{complexity}}$: $-\beta |V_T|$ (penalize higher-order diagrams)
+### Hyperparameters
 
-## 🛠️ Installation
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| **Total Steps** | 500,000 | Total environment interactions |
+| **Batch Size** | 32 | PPO batch size |
+| **Learning Rate** | 3e-4 | Adam optimizer learning rate |
+| **Fixed Dim** | 2 | Dimensions for Q, L (Known) |
+| **Learnable Dim** | 6 | Dimensions for discovery (Unknown) |
+| **Physics Penalty ($\lambda$)** | 5.0 | Strength of physics gate enforcement |
+| **Sparsity Weight** | 0.001 | Regularization to keep $\alpha_{\text{learnable}}$ sparse |
 
-### 1. Install Python Dependencies
+### Datasets
 
+The model is trained on **Decay** reactions and tested on **Scattering** reactions to evaluate generalization to new topologies.
+
+**Training Set (Decays 1$\to$N)**:
+-   **Leptonic**: $\mu \to e \nu \bar{\nu}$, $\tau \to \mu \nu \bar{\nu}$, $Z \to \ell^+\ell^-$
+-   **Hadronic (Critical for B discovery)**: $Z \to u\bar{u}$, $Z \to d\bar{d}$, $Z \to c\bar{c}$
+
+**Testing Set (Scattering 2$\to$N)**:
+-   **Annihilation**: $e^+e^- \to \mu^+\mu^-$
+-   **Scattering**: $e^-e^- \to e^-e^-$
+-   **Compton**: $e^-\gamma \to e^-\gamma$
+
+## 🚂 Usage
+
+### Basic Training
+Run the main experiment script:
 ```powershell
-cd rl_training
-pip install -r requirements.txt
+python run_experiment.py
 ```
-
-**Note**: PyTorch Geometric requires PyTorch to be installed first. If you encounter issues:
-
-```powershell
-# Install PyTorch (CUDA 11.8)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Install PyG
-pip install torch-geometric
-pip install pyg-lib torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-2.0.0+cu118.html
-```
-
-### 2. Verify Installation
-
-```powershell
-python -c "import torch; import torch_geometric; print('✅ All dependencies installed')"
-```
-
-## 🚂 Training
-
-### Quick Start
-
-Run the default training script (e⁻ + e⁺ → μ⁻ + μ⁺):
-
-```powershell
-cd rl_training
-python training.py
-```
-
 This will:
-- Train the agent for 100,000 timesteps
-- Save checkpoints to `checkpoints/`
-- Export TensorBoard logs to `logs/`
-- Save the best diagram to `diagrams/current_best.json`
+- Train the agent on decay reactions (1→N).
+- Periodically evaluate on scattering reactions (2→N).
+- Save results to `results/`.
 
-### Monitor Training in Real-Time
-
-Open `training_viz.html` in your browser:
-
+### Quick Test
+Run a short training session to verify everything works:
 ```powershell
-# Open the visualization
-start ../training_viz.html
+python run_experiment.py --quick
 ```
 
-The page will auto-refresh every 2 seconds and display:
-- Current episode number
-- Latest reward
-- Diagram complexity (number of propagators)
-- **Live rendering of the best diagram found so far**
-
-### Custom Reactions
-
-Edit `training.py` to define your own reaction:
-
-```python
-# Example: Electron-positron annihilation to photon to muon pair
-initial_state = ['e', 'e']  # e⁻, e⁺ (antiparticle flag set automatically)
-final_state = ['mu', 'mu']  # μ⁻, μ⁺
-
-env = FeynmanDiagramEnv(
-    initial_state=initial_state,
-    final_state=final_state,
-    max_vertices=10,
-    max_steps=50
-)
-```
-
-### Hyperparameter Tuning
-
-Adjust PPO hyperparameters in `training.py`:
-
-```python
-trainer = PPOTrainer(
-    env=env,
-    model=model,
-    learning_rate=3e-4,      # Learning rate
-    gamma=0.99,              # Discount factor
-    gae_lambda=0.95,         # GAE lambda
-    clip_epsilon=0.2,        # PPO clip range
-    value_coef=0.5,          # Value loss coefficient
-    entropy_coef=0.01        # Entropy bonus
-)
-```
-
-Physics gate penalty (controls how strictly conservation is enforced):
-
-```python
-model = FeynmanGCPN(
-    lambda_penalty=5.0  # Higher = stricter enforcement
-)
-```
-
-## 📊 TensorBoard Monitoring
-
-Launch TensorBoard to visualize training metrics:
-
+### Custom Parameters
 ```powershell
-tensorboard --logdir=logs
+python run_experiment.py --steps 100000 --learnable-dim 8 --output results/my_experiment
 ```
 
-Then open `http://localhost:6006` to see:
-- Mean episode reward
-- Policy loss
-- Value loss
-- Entropy (exploration measure)
+## 📊 Output
 
-## 🎨 Visualization with Feynman Forge
-
-The generated diagrams are automatically exported in a format compatible with your JavaScript frontend.
-
-### Option 1: Manual Import
-
-1. After training, the best diagram is saved to `diagrams/current_best.json`
-2. Open `feymann.html` in your browser
-3. Click **"Canvas Manager"** → **"Import"**
-4. Select `diagrams/current_best.json`
-
-### Option 2: Live Monitoring
-
-Use `training_viz.html` (already set up) to watch diagrams update in real-time during training.
-
-### JSON Format
-
-The exported diagrams follow this structure (compatible with `canvas-manager.js`):
-
-```json
-{
-  "timestamp": "2025-11-21T12:00:00",
-  "metadata": {
-    "episode": 150,
-    "reward": 12.5,
-    "initial_state": ["e", "e"],
-    "final_state": ["mu", "mu"]
-  },
-  "shapes": [
-    {
-      "id": 0,
-      "type": "fermion",
-      "p1": {"x": 80, "y": 200},
-      "p2": {"x": 400, "y": 300},
-      "props": {
-        "particleId": "e",
-        "isAnti": false,
-        "color": null,
-        "category": "fermion",
-        "group": "lepton"
-      }
-    }
-  ]
-}
-```
-
-## 🧪 Evaluation
-
-Generate and evaluate multiple diagrams from a trained model:
-
-```python
-from visualization_bridge import DiagramEvaluator
-from models import FeynmanGCPN
-from feynman_env import FeynmanDiagramEnv
-
-# Load trained model
-model = FeynmanGCPN(...)
-checkpoint = torch.load('checkpoints/model_final.pt')
-model.load_state_dict(checkpoint['model_state_dict'])
-
-# Create evaluator
-env = FeynmanDiagramEnv(initial_state=['e', 'e'], final_state=['mu', 'mu'])
-evaluator = DiagramEvaluator(model, env)
-
-# Generate 10 diagrams
-stats = evaluator.evaluate_multiple(num_episodes=10, output_dir='evaluation')
-
-# Results saved to evaluation/
-# - diagram_000.json, diagram_001.json, ...
-# - best_diagram.json
-# - statistics.json
-```
-
-## 📖 Architecture Details
-
-### 1. MPNN Encoder
-
-A standard Message Passing Neural Network that aggregates particle information:
-
-```python
-for layer in range(num_layers):
-    # Message: neighbor node + edge features → message
-    message = MLP(neighbor_features, edge_features)
-    
-    # Aggregate: sum messages from all neighbors
-    aggregated = sum(messages)
-    
-    # Update: GRU(old_state, aggregated_message)
-    new_state = GRU(node_state, aggregated)
-```
-
-### 2. Physics-Gated Policy Head
-
-```python
-# Raw neural network output
-logits = MLP(graph_embedding)
-
-# Compute physics gate for each action
-for action in action_space:
-    mismatch = compute_conservation_mismatch(action)
-    gate_value = exp(-lambda * sum(w_k * mismatch_k^2))
-    
-# Mask logits
-masked_logits = logits + log(gate_value)
-
-# Softmax
-policy = softmax(masked_logits)
-```
-
-### 3. Value Head
-
-Standard MLP with global mean pooling:
-
-```python
-graph_embedding = mean(node_embeddings)
-value = MLP(graph_embedding)
-```
-
-## 🔧 Troubleshooting
-
-### Import Errors
-
-If you see `ModuleNotFoundError: No module named 'torch_geometric'`:
-
-```powershell
-pip install torch-geometric
-```
-
-### CUDA Out of Memory
-
-Reduce batch size or hidden dimensions:
-
-```python
-model = FeynmanGCPN(hidden_dim=64)  # Default is 128
-trainer = PPOTrainer(batch_size=32)  # Default is 64
-```
-
-### Slow Training
-
-Enable GPU acceleration (if available):
-
-```python
-trainer = PPOTrainer(device='cuda')
-```
-
-Check GPU usage:
-
-```powershell
-nvidia-smi
-```
-
-## 📚 Physics Database
-
-The `physics_engine.py` mirrors your JavaScript constants exactly:
-
-- **Leptons**: e⁻, μ⁻, τ⁻, νₑ, ν_μ, ν_τ
-- **Quarks**: u, d, s, c, b, t (with color charges)
-- **Bosons**: γ, g, W⁺, W⁻, Z⁰, H
-- **Conservation Laws**: Q, L, B, Color, Spin, Parity
-- **Interaction Rules**: Photon-charge coupling, Gluon-quark coupling, Higgs-mass coupling, CKM matrix
-
-All quantum numbers match the Standard Model exactly.
-
-## 🎯 Example Reactions
-
-**1. Electron-positron annihilation (QED)**
-```python
-initial_state = ['e', 'e']  # e⁻, e⁺
-final_state = ['mu', 'mu']  # μ⁻, μ⁺ via γ
-```
-
-**2. Beta decay (Weak interaction)**
-```python
-initial_state = ['d']  # down quark
-final_state = ['u', 'e', 'nu_e']  # u + e⁻ + ν̄ₑ via W⁻
-```
-
-**3. Quark scattering (QCD)**
-```python
-initial_state = ['u', 'u']  # up quarks
-final_state = ['u', 'u']  # via gluon exchange
-```
+Results are saved in the `results/` directory (or specified output dir):
+- `best.pt`: Best model checkpoint.
+- `final.pt`: Final model checkpoint.
+- `results.json`: Training metrics and analysis of discovered conservation laws.
 
 ## 🤝 Integration with Feynman Forge
 
-The RL system is **fully compatible** with your existing frontend:
-
-1. **Same particle database** (`PHYSICS` object)
-2. **Same validation logic** (`ConservationLaws` matches `validateDiagram()`)
-3. **Same JSON format** for diagram export
-4. **Same canvas rendering** (coordinates, colors, styles)
-
-You can seamlessly switch between:
-- **Manual drawing** (your current UI)
-- **AI generation** (Gemini API)
-- **RL generation** (this system)
+The generated diagrams and models are compatible with the Feynman Forge frontend. The `physics_engine.py` mirrors the JavaScript physics logic, ensuring consistency.
 
 ## 📄 Citation
 
 If you use this code, please cite:
-
 ```
 Feynman-GCPN: Physics-Informed Reinforcement Learning for Automated Feynman Diagram Generation
 Wang, S. (2025)
 ```
-
-## 📜 License
-
-This project is part of the Feynman Forge toolset. See the main repository for license details.
-
-## 🙏 Acknowledgments
-
-- **Standard Model data** from Particle Data Group (PDG)
-- **PyTorch Geometric** for graph neural network primitives
-- **Stable-Baselines3** for PPO inspiration (reimplemented here)
-
----
-
-**Happy Training! 🚀**
-
-For questions or issues, please open an issue in the repository.

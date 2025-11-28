@@ -55,21 +55,31 @@ class FeynmanDiagramEnv(gym.Env):
         self.canvas_width = canvas_width
         self.canvas_height = canvas_height
         
-        # Reward weights
+        # Reward weights - V8 "Scientist Reward" structure
+        # CRITICAL: Baryon conservation gets NO immediate feedback, only sparse terminal reward
         self.reward_weights = reward_weights or {
-            'charge_violation': -0.5,
-            'lepton_violation': -0.5,
-            'baryon_violation': -0.5,
+            # KNOWN LAWS: Immediate feedback (Q, L)
+            'charge_conservation': 2.0,      # Reward for conserving charge
+            'lepton_conservation': 2.0,      # Reward for conserving lepton number
+            'charge_violation': -2.0,        # Penalty for violating charge
+            'lepton_violation': -2.0,        # Penalty for violating lepton number
+
+            # UNKNOWN LAWS: NO immediate feedback (B)
+            # 'baryon_violation' intentionally REMOVED - no step-level feedback
+            # Baryon conservation only checked at terminal state
+
+            # Other rewards
             'color_violation': -1.0,
             'interaction_violation': -0.5,
             'target_match': 20.0,
             'topology_valid': 10.0,
-            'successful_connection': 2.0,
-            'vertex_created': 1.0,
-            'conservation_bonus': 2.0,
-            'complexity_penalty': -0.1,
-            'step_penalty': 0.0,
-            'invalid_action': -0.5,
+            'successful_connection': 1.0,
+            'vertex_created': 0.5,
+            'step_penalty': -0.01,
+            'invalid_action': -1.0,
+
+            # SPARSE GLOBAL REWARD (terminal only, includes B check)
+            'sparse_global_reward': 50.0,  # Huge reward for complete valid diagram
         }
         
         self.num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
@@ -384,66 +394,170 @@ class FeynmanDiagramEnv(gym.Env):
         return open_lines
     
     def _compute_step_reward(self, vertex_idx: int) -> float:
+        """
+        V8 Scientist Reward: ONLY give immediate feedback for KNOWN laws (Q, L)
+
+        CRITICAL: Baryon conservation (B) is NOT checked here!
+        This forces the model to learn B conservation from sparse terminal rewards only.
+        """
         vertex = self.vertices[vertex_idx]
         # Filter out consumed edges
         connected_edges = [self.edges[eid] for eid in vertex['connected_edges'] if self.edges[eid]['state'] != 'consumed']
-        
+
         incoming = [e for e in connected_edges if e['target'] == vertex_idx]
         outgoing = [e for e in connected_edges if e['source'] == vertex_idx]
-        
+
         reward = 0.0
-        
+
+        # Extract quantum numbers
         q_in = [self._get_charge(e) for e in incoming]
         q_out = [self._get_charge(e) for e in outgoing]
         l_in = [self._get_lepton(e) for e in incoming]
         l_out = [self._get_lepton(e) for e in outgoing]
-        b_in = [self._get_baryon(e) for e in incoming]
-        b_out = [self._get_baryon(e) for e in outgoing]
+        # NOTE: b_in, b_out intentionally not extracted - no immediate B feedback!
         colors_in = [e['color'] for e in incoming]
         colors_out = [e['color'] for e in outgoing]
-        
+
+        # Check KNOWN laws only (Q, L)
         charge_ok, charge_mismatch = ConservationLaws.check_charge_conservation(q_in, q_out)
         lepton_ok, lepton_mismatch = ConservationLaws.check_lepton_conservation(l_in, l_out)
-        baryon_ok, baryon_mismatch = ConservationLaws.check_baryon_conservation(b_in, b_out)
         color_ok, color_mismatch = ConservationLaws.check_color_conservation(colors_in, colors_out)
-        
-        if not charge_ok: reward += self.reward_weights['charge_violation'] * charge_mismatch
-        if not lepton_ok: reward += self.reward_weights['lepton_violation'] * lepton_mismatch
-        if not baryon_ok: reward += self.reward_weights['baryon_violation'] * baryon_mismatch
-        if not color_ok: reward += self.reward_weights['color_violation'] * color_mismatch
-        
+
+        # Immediate rewards/penalties for KNOWN laws
+        if charge_ok:
+            reward += self.reward_weights['charge_conservation']
+        else:
+            reward += self.reward_weights['charge_violation'] * charge_mismatch
+
+        if lepton_ok:
+            reward += self.reward_weights['lepton_conservation']
+        else:
+            reward += self.reward_weights['lepton_violation'] * lepton_mismatch
+
+        # Color conservation (QCD)
+        if not color_ok:
+            reward += self.reward_weights['color_violation'] * color_mismatch
+
+        # Interaction rules
         particle_ids = [e['particle_id'] for e in connected_edges]
         rules_ok, violations = ConservationLaws.check_interaction_rules(particle_ids)
-        if not rules_ok: reward += self.reward_weights['interaction_violation'] * len(violations)
-        
-        if charge_ok and lepton_ok and baryon_ok and color_ok and rules_ok:
-            reward += 2.0
-            
+        if not rules_ok:
+            reward += self.reward_weights['interaction_violation'] * len(violations)
+
         return reward
     
     def _compute_terminal_reward(self) -> float:
+        """
+        V8 Terminal Reward: SPARSE GLOBAL REWARD including ALL conservation laws
+
+        This is where Baryon conservation is finally checked!
+        If the diagram conserves ALL laws (Q, L, B, Color) AND matches target states,
+        the agent gets a HUGE sparse reward (+50.0).
+
+        This is the only way the agent learns about Baryon conservation - through
+        trial-and-error guided by the sparse global signal.
+        """
         reward = 0.0
         is_connected = self._is_graph_connected()
         no_dangling = self._no_dangling_internal_lines()
-        
+
         if not (is_connected and no_dangling):
             reward -= 10.0
             return reward
         else:
             reward += self.reward_weights['topology_valid']
-            
+
         initial_match = self._check_external_match(self.initial_particles, 'initial')
         final_match = self._check_external_match(self.final_particles, 'final')
-        
-        if initial_match and final_match:
-            reward += self.reward_weights['target_match']
-        else:
+
+        if not (initial_match and final_match):
             reward -= 5.0
-            
+            return reward
+        else:
+            reward += self.reward_weights['target_match']
+
+        # ===== SPARSE GLOBAL REWARD: Check ALL conservation laws =====
+        # This is the ONLY place where Baryon conservation is checked!
+        all_laws_conserved = self._check_global_conservation()
+
+        if all_laws_conserved:
+            # HUGE reward for perfect diagram
+            reward += self.reward_weights['sparse_global_reward']
+        else:
+            # No explicit penalty (just don't get the bonus)
+            # This forces the model to "discover" what's missing
+            pass
+
+        # Complexity penalty
         num_interaction_vertices = sum(1 for v in self.vertices if v['type'] == 'interaction')
-        reward += self.reward_weights['complexity_penalty'] * num_interaction_vertices
-        
+        reward += self.reward_weights.get('complexity_penalty', -0.1) * num_interaction_vertices
+
         return reward
+
+    def _check_global_conservation(self) -> bool:
+        """
+        Check ALL conservation laws globally across the entire diagram
+
+        Returns True only if Q, L, B, and Color are ALL conserved.
+        This is used for the sparse global reward.
+        """
+        # Collect all particle quantum numbers from initial and final states
+        q_initial = []
+        l_initial = []
+        b_initial = []
+        colors_initial = []
+
+        q_final = []
+        l_final = []
+        b_final = []
+        colors_final = []
+
+        # Extract from edges
+        for edge in self.edges:
+            if not edge['is_external']:
+                continue
+
+            p = PhysicsConstants.get_particle_by_id(edge['particle_id'])
+            b_particle = PhysicsConstants.get_boson_by_id(edge['particle_id'])
+
+            if p:
+                q = -p.charge if edge['is_anti'] else p.charge
+                l = -p.lepton if edge['is_anti'] else p.lepton
+                baryon = -p.baryon if edge['is_anti'] else p.baryon
+            elif b_particle:
+                q = b_particle.charge
+                l = b_particle.lepton
+                baryon = b_particle.baryon
+            else:
+                q = l = baryon = 0.0
+
+            # Determine if initial or final
+            vertex_id = edge['source'] if edge['source'] is not None else edge['target']
+            if vertex_id is None:
+                continue
+
+            vertex = self.vertices[vertex_id]
+
+            if vertex['type'] == 'initial':
+                q_initial.append(q)
+                l_initial.append(l)
+                b_initial.append(baryon)
+                if edge['color']:
+                    colors_initial.append(edge['color'])
+            elif vertex['type'] == 'final':
+                q_final.append(q)
+                l_final.append(l)
+                b_final.append(baryon)
+                if edge['color']:
+                    colors_final.append(edge['color'])
+
+        # Check conservation laws
+        charge_ok, _ = ConservationLaws.check_charge_conservation(q_initial, q_final)
+        lepton_ok, _ = ConservationLaws.check_lepton_conservation(l_initial, l_final)
+        baryon_ok, _ = ConservationLaws.check_baryon_conservation(b_initial, b_final)  # ← BARYON CHECK!
+        color_ok, _ = ConservationLaws.check_color_conservation(colors_initial, colors_final)
+
+        return charge_ok and lepton_ok and baryon_ok and color_ok
     
     def _check_external_match(self, target_particles: List[str], vertex_type: str) -> bool:
         external_vertices = [v for v in self.vertices if v['type'] == vertex_type]

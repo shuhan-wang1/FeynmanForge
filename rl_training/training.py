@@ -100,6 +100,11 @@ class PPOTrainer:
         self.device = device
         self.num_envs = num_envs
         self.is_parallel = num_envs > 1
+
+        # V8 CRITICAL FIX: Multi-task training support
+        # This will be set by run_experiment.py to enable cycling through reactions
+        self.training_envs = None
+        self.current_env_idx = 0
         
         # Hyperparameters
         self.gamma = gamma
@@ -130,15 +135,35 @@ class PPOTrainer:
         os.makedirs('diagrams', exist_ok=True)
         self._save_current_diagram()
     
+    def _get_current_env(self):
+        """
+        V8 CRITICAL FIX: Get current training environment
+
+        Cycles through training_envs if available (multi-task training)
+        Otherwise uses the single self.env
+        """
+        if self.training_envs is not None and len(self.training_envs) > 0:
+            return self.training_envs[self.current_env_idx]
+        return self.env
+
+    def _cycle_training_env(self):
+        """
+        V8 CRITICAL FIX: Switch to next training environment
+
+        This ensures the model sees all reactions including hadronic ones with quarks
+        """
+        if self.training_envs is not None and len(self.training_envs) > 1:
+            self.current_env_idx = (self.current_env_idx + 1) % len(self.training_envs)
+
     def collect_rollout(self, num_steps: int, deterministic: bool = False) -> Dict:
         """
         Collect a rollout of experiences
         支持单环境和并行环境
-        
+
         Args:
             num_steps: Number of steps to collect
             deterministic: Whether to use deterministic policy
-            
+
         Returns:
             Statistics dictionary
         """
@@ -148,11 +173,17 @@ class PPOTrainer:
             return self._collect_rollout_single(num_steps, deterministic)
     
     def _collect_rollout_single(self, num_steps: int, deterministic: bool = False) -> Dict:
-        """单环境收集rollout"""
+        """
+        单环境收集rollout
+
+        V8 CRITICAL FIX: Now uses _get_current_env() to support multi-task training
+        """
         episode_rewards = []
         episode_lengths = []
-        
-        state, info = self.env.reset()
+
+        # V8 FIX: Get current training environment (may cycle through reactions)
+        current_env = self._get_current_env()
+        state, info = current_env.reset()
         episode_reward = 0
         episode_length = 0
         
@@ -192,7 +223,7 @@ class PPOTrainer:
             
             # 瓶颈在这里：env.step() 在CPU上串行执行
             # 这是RL的固有限制，环境必须串行执行
-            next_state, reward, terminated, truncated, info = self.env.step(action)
+            next_state, reward, terminated, truncated, info = current_env.step(action)
             done = terminated or truncated
             
             # Store experience
@@ -204,7 +235,7 @@ class PPOTrainer:
             if done:
                 episode_rewards.append(episode_reward)
                 episode_lengths.append(episode_length)
-                
+
                 # Check if this is the best diagram so far
                 if episode_reward > self.best_reward:
                     self.best_reward = episode_reward
@@ -212,13 +243,18 @@ class PPOTrainer:
                     self.best_diagram = env_ref.get_diagram_json()
                     # Immediately save best diagram for visualization
                     self._save_best_diagram()
-                
+
                 # Also save current diagram periodically for live monitoring
                 if len(episode_rewards) % 1 == 0:  # 每个episode都保存
                     self._save_current_diagram()
-                
-                # Reset
-                state, info = self.env.reset()
+
+                # V8 CRITICAL FIX: Cycle to next training environment after episode
+                # This ensures the model sees all reactions (leptonic AND hadronic)
+                self._cycle_training_env()
+                current_env = self._get_current_env()
+
+                # Reset with new environment
+                state, info = current_env.reset()
                 episode_reward = 0
                 episode_length = 0
             else:
@@ -468,9 +504,21 @@ class PPOTrainer:
                 
                 # Entropy bonus
                 entropy_loss = -batch_entropies.mean()
-                
-                # Total loss
-                loss = policy_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+
+                # V8 Addition: Sparsity loss on α_learnable (Conservation Law Discovery)
+                # Encourages the model to only "discover" a few conservation laws
+                sparsity_loss = 0.0
+                if hasattr(self.model, 'conservation_mask'):
+                    sparsity_loss = self.model.conservation_mask.get_sparsity_loss()
+                    sparsity_weight = getattr(self.model, 'sparsity_weight', 0.001)
+                else:
+                    sparsity_weight = 0.0
+
+                # Total loss (PPO + Sparsity)
+                loss = (policy_loss +
+                       self.value_coef * value_loss +
+                       self.entropy_coef * entropy_loss +
+                       sparsity_weight * sparsity_loss)
                 
                 # Optimize（梯度累积以提高GPU利用率）
                 self.optimizer.zero_grad(set_to_none=True)  # set_to_none=True更快
@@ -482,15 +530,29 @@ class PPOTrainer:
                 total_value_loss += value_loss.item()
                 total_entropy += -entropy_loss.item()
                 num_updates += 1
-        
+
         # Clear buffer
         self.buffer.clear()
-        
-        return {
+
+        # Get conservation metrics for logging (V8)
+        conservation_metrics = {}
+        if hasattr(self.model, 'get_conservation_metrics'):
+            with torch.no_grad():
+                conservation_metrics = self.model.get_conservation_metrics()
+                # Convert tensors to floats
+                conservation_metrics = {
+                    k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else v
+                    for k, v in conservation_metrics.items()
+                }
+
+        result = {
             'policy_loss': total_policy_loss / num_updates if num_updates > 0 else 0,
             'value_loss': total_value_loss / num_updates if num_updates > 0 else 0,
             'entropy': total_entropy / num_updates if num_updates > 0 else 0
         }
+        result.update(conservation_metrics)
+
+        return result
     
     def train(
         self,

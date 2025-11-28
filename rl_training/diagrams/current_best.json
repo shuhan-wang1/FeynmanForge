@@ -1,92 +1,92 @@
 {
-  "timestamp": "2025-11-22T14:16:04.370746",
+  "timestamp": "2025-11-28T13:53:54.174582",
   "metadata": {
-    "episode": 0,
+    "episode": 1,
     "reward": 0.0,
     "initial_state": [
-      "mu",
-      "mu_bar"
+      "mu"
     ],
     "final_state": [
       "e",
-      "e_bar"
+      "nu_e_bar",
+      "nu_mu"
     ]
   },
   "shapes": [
     {
-      "id": "initial_0",
+      "id": 0,
       "type": "fermion",
       "p1": {
-        "x": 50,
-        "y": 200
+        "x": 80,
+        "y": 300.0
       },
       "p2": {
-        "x": 150,
-        "y": 200
+        "x": 180,
+        "y": 350.0
       },
       "props": {
         "particleId": "mu",
         "isAnti": false,
-        "color": "none",
+        "color": null,
         "category": "fermion",
-        "group": "initial"
+        "group": "lepton"
       }
     },
     {
-      "id": "initial_1",
+      "id": 1,
       "type": "fermion",
       "p1": {
-        "x": 150,
+        "x": 0,
         "y": 300
       },
       "p2": {
-        "x": 50,
-        "y": 300
-      },
-      "props": {
-        "particleId": "mu",
-        "isAnti": true,
-        "color": "none",
-        "category": "fermion",
-        "group": "initial"
-      }
-    },
-    {
-      "id": "final_0",
-      "type": "fermion",
-      "p1": {
-        "x": 650,
-        "y": 200
-      },
-      "p2": {
-        "x": 750,
-        "y": 200
+        "x": 720,
+        "y": 300.0
       },
       "props": {
         "particleId": "e",
         "isAnti": false,
-        "color": "none",
+        "color": null,
         "category": "fermion",
-        "group": "final"
+        "group": "lepton"
       }
     },
     {
-      "id": "final_1",
+      "id": 2,
       "type": "fermion",
       "p1": {
-        "x": 750,
-        "y": 300
+        "x": 720,
+        "y": 600.0
       },
       "p2": {
-        "x": 650,
+        "x": 0,
         "y": 300
       },
       "props": {
-        "particleId": "e",
+        "particleId": "nu_e",
         "isAnti": true,
-        "color": "none",
+        "color": null,
         "category": "fermion",
-        "group": "final"
+        "group": "lepton"
+      }
+    },
+    {
+      "id": 3,
+      "type": "fermion",
+      "p1": {
+        "x": 0,
+        "y": 300
+      },
+      "p2": {
+        "x": 720,
+        "y": 900.0
+      },
+      "props": {
+        "particleId": "nu_mu",
+        "isAnti": false,
+        "color": null,
+        "category": "fermion",
+        "group": "lepton"
       }
     }
   ]
