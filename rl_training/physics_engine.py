@@ -155,11 +155,18 @@ class PhysicsConstants:
     
     @classmethod
     def has_charge(cls, particle_id: str) -> bool:
-        """Check if particle has electric charge"""
-        p = cls.get_particle_by_id(particle_id)
+        """
+        Check if particle has electric charge
+        
+        ✅ BUG FIX 7: Parse antiparticle suffix (_bar)
+        """
+        # Strip '_bar' suffix to get base particle ID
+        base_id = particle_id.replace('_bar', '') if particle_id.endswith('_bar') else particle_id
+        
+        p = cls.get_particle_by_id(base_id)
         if p:
             return abs(p.charge) > 1e-6
-        b = cls.get_boson_by_id(particle_id)
+        b = cls.get_boson_by_id(base_id)
         if b:
             return abs(b.charge) > 1e-6
         return False

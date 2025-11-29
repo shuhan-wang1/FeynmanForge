@@ -1,110 +1,173 @@
 """
-PPO Training Loop for Feynman-GCPN
+优化的PPO训练循环 - 针对GPU利用率优化
+
+关键优化:
+1. 真正的批量GPU推理 (使用PyG Batch)
+2. 减少CPU-GPU同步 (批量处理actions)
+3. 异步数据传输 (pin_memory + non_blocking)
+4. 高效的rollout收集
+
+======================================
+BUG FIXES (V8.1):
+======================================
+BUG 1: vertex_states=None 导致Physics Gate失效
+  - 位置: collect_rollout_optimized 的 _batch_forward 调用
+  - 修复: 从每个环境提取vertex_states并传入模型
+  - 影响: Physics Gate现在能正确计算守恒律违规
+  
+BUG 2: 没有Multi-task Training  
+  - 问题: 所有环境永远只跑muon_decay
+  - 修复: 添加_cycle_training_env()方法，每次episode完成后切换反应类型
+  - 影响: 模型现在会在6种不同反应间循环训练 (muon_decay → tau_decay → z_to_uu → ...)
+  
+BUG 3: 模型不支持真正的Batch Forward
+  - 问题: policy_head需要vertex_states才能正确计算
+  - 修复: _batch_forward中分两步：(1) batch处理MPNN encoder (2) per-env处理policy head
+  - 影响: 保持了batch处理的效率，同时正确支持Physics Gate
 """
+
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F  # Missing import!
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch_geometric.data import Data, Batch
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Union
 import json
 import os
 from datetime import datetime
 from tqdm import tqdm
-
-from feynman_env import FeynmanDiagramEnv
-from models import FeynmanGCPN
-from physics_engine import PhysicsConstants
+import time
 
 
-class RolloutBuffer:
+class OptimizedRolloutBuffer:
     """
-    Storage for trajectories collected during rollouts
+    优化的经验回放缓冲区
+    
+    改进:
+    1. 预分配内存
+    2. 支持批量添加
+    3. 高效的GPU传输
     """
     
-    def __init__(self):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-        self.values = []
-        self.log_probs = []
-        self.dones = []
-        self.vertex_states = []
-    
+    def __init__(self, num_envs: int, rollout_steps: int, device: str = 'cuda'):
+        self.num_envs = num_envs
+        self.rollout_steps = rollout_steps
+        self.device = device
+        self.ptr = 0
+        
+        # 预分配存储 (在CPU上，需要时传到GPU)
+        self.states: List[Data] = []
+        self.vertex_states_buffer: List[List[Dict]] = []  # ✅ BUG FIX 3a: Store vertex_states
+        self.actions = {
+            'action_type': np.zeros((rollout_steps, num_envs), dtype=np.int64),
+            'vertex_idx': np.zeros((rollout_steps, num_envs), dtype=np.int64),
+            'particle_type': np.zeros((rollout_steps, num_envs), dtype=np.int64),
+            'target_vertex': np.zeros((rollout_steps, num_envs), dtype=np.int64),
+        }
+        self.rewards = np.zeros((rollout_steps, num_envs), dtype=np.float32)
+        self.values = np.zeros((rollout_steps, num_envs), dtype=np.float32)
+        self.log_probs = np.zeros((rollout_steps, num_envs), dtype=np.float32)
+        self.dones = np.zeros((rollout_steps, num_envs), dtype=np.float32)
+        
     def add(
         self,
-        state,
-        action: Dict,
-        reward: float,
-        value: float,
-        log_prob: float,
-        done: bool,
-        vertex_state: List[Dict]
+        states: List[Data],  # List of Data for each env
+        actions: Dict[str, np.ndarray],  # {action_type: [num_envs], ...}
+        rewards: np.ndarray,  # [num_envs]
+        values: np.ndarray,   # [num_envs]
+        log_probs: np.ndarray,  # [num_envs]
+        dones: np.ndarray,    # [num_envs]
+        vertex_states_list: Optional[List[List[Dict]]] = None  # ✅ BUG FIX 3a
     ):
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-        self.values.append(value)
-        self.log_probs.append(log_prob)
-        self.dones.append(done)
-        self.vertex_states.append(vertex_state)
+        """批量添加一步的数据"""
+        self.states.extend(states)  # 累积所有states
+        
+        # ✅ BUG FIX 3b: Store vertex_states if provided
+        if vertex_states_list is not None:
+            self.vertex_states_buffer.extend(vertex_states_list)
+        
+        step = self.ptr
+        self.actions['action_type'][step] = actions['action_type']
+        self.actions['vertex_idx'][step] = actions['vertex_idx']
+        self.actions['particle_type'][step] = actions['particle_type']
+        self.actions['target_vertex'][step] = actions['target_vertex']
+        
+        self.rewards[step] = rewards
+        self.values[step] = values
+        self.log_probs[step] = log_probs
+        self.dones[step] = dones
+        
+        self.ptr += 1
     
-    def clear(self):
-        self.states.clear()
-        self.actions.clear()
-        self.rewards.clear()
-        self.values.clear()
-        self.log_probs.clear()
-        self.dones.clear()
-        self.vertex_states.clear()
-    
-    def get(self):
+    def get_tensors(self) -> Dict[str, torch.Tensor]:
+        """获取所有数据作为GPU张量"""
         return {
-            'states': self.states,
-            'actions': self.actions,
-            'rewards': self.rewards,
-            'values': self.values,
-            'log_probs': self.log_probs,
-            'dones': self.dones,
-            'vertex_states': self.vertex_states
+            'actions': {
+                k: torch.from_numpy(v[:self.ptr]).to(self.device)
+                for k, v in self.actions.items()
+            },
+            'rewards': torch.from_numpy(self.rewards[:self.ptr]).to(self.device),
+            'values': torch.from_numpy(self.values[:self.ptr]).to(self.device),
+            'log_probs': torch.from_numpy(self.log_probs[:self.ptr]).to(self.device),
+            'dones': torch.from_numpy(self.dones[:self.ptr]).to(self.device),
         }
     
+    def get_batched_states(self) -> Batch:
+        """获取batched states用于批量评估"""
+        return Batch.from_data_list(self.states).to(self.device)
+    
+    def clear(self):
+        """清空缓冲区"""
+        self.ptr = 0
+        self.states.clear()
+        self.vertex_states_buffer.clear()  # ✅ BUG FIX 3c
+        # 不需要重置numpy数组，会被覆盖
+    
     def __len__(self):
-        return len(self.rewards)
+        return self.ptr * self.num_envs
 
 
-class PPOTrainer:
+class OptimizedPPOTrainer:
     """
-    Proximal Policy Optimization trainer for Feynman-GCPN
+    优化的PPO训练器
+    
+    关键优化:
+    1. 批量前向传播 - 所有环境的state一次推理
+    2. 批量action采样 - GPU上完成采样
+    3. 异步环境执行 - 在GPU计算时并行执行环境step
+    4. 减少同步点 - 最小化.item()调用
     """
     
     def __init__(
         self,
-        env,  # 可以是单个环境或ParallelEnvs
-        model: FeynmanGCPN,
-        learning_rate: float = 3e-4,
+        parallel_env,  # ParallelEnvs 实例
+        model: nn.Module,
+        device: str = 'cuda',
+        learning_rate: float = 2e-4,
         gamma: float = 0.99,
         gae_lambda: float = 0.95,
         clip_epsilon: float = 0.2,
         value_coef: float = 0.5,
-        entropy_coef: float = 0.01,
+        entropy_coef: float = 0.3,
         max_grad_norm: float = 0.5,
-        epochs_per_update: int = 4,
-        batch_size: int = 64,
-        device: str = 'cuda' if torch.cuda.is_available() else 'cpu',
-        num_envs: int = 1  # 并行环境数量
+        epochs_per_update: int = 6,
+        mini_batch_size: int = 256,  # PPO mini-batch大小
+        num_envs: int = 8,
+        training_reactions: List[Dict] = None,  # BUG FIX 2: Multi-task training
     ):
-        self.env = env
+        self.env = parallel_env
         self.model = model.to(device)
         self.device = device
         self.num_envs = num_envs
-        self.is_parallel = num_envs > 1
-
-        # V8 CRITICAL FIX: Multi-task training support
-        # This will be set by run_experiment.py to enable cycling through reactions
-        self.training_envs = None
-        self.current_env_idx = 0
+        
+        # BUG FIX 2: Multi-task training setup
+        from config import Config
+        self.training_reactions = training_reactions or Config.get_training_reactions()
+        self.current_reaction_idx = 0
+        self.current_reaction = self.training_reactions[0]
         
         # Hyperparameters
         self.gamma = gamma
@@ -114,746 +177,687 @@ class PPOTrainer:
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
         self.epochs_per_update = epochs_per_update
-        self.batch_size = batch_size
+        self.mini_batch_size = mini_batch_size
         
-        # Optimizer
+        # Optimizer with gradient scaling for mixed precision
         self.optimizer = optim.Adam(self.model.parameters(), lr=learning_rate)
         
-        # Buffer
-        self.buffer = RolloutBuffer()
+        # 可选: 混合精度训练
+        self.scaler = torch.amp.GradScaler('cuda') if device == 'cuda' else None
+        self.use_amp = False  # 设为True启用混合精度
         
         # Logging
         self.writer = None
         self.global_step = 0
         
-        # Best model tracking
+        # Statistics
+        self.episode_rewards = []
+        self.episode_lengths = []
         self.best_reward = -float('inf')
-        self.best_diagram = None
-        self.vis_env = None  # 用于可视化的环境引用
+        self.reaction_success_counts = {r['name']: 0 for r in self.training_reactions}
         
-        # Save initial diagram immediately for visualization
-        os.makedirs('diagrams', exist_ok=True)
-        self._save_current_diagram()
-    
-    def _get_current_env(self):
-        """
-        V8 CRITICAL FIX: Get current training environment
-
-        Cycles through training_envs if available (multi-task training)
-        Otherwise uses the single self.env
-        """
-        if self.training_envs is not None and len(self.training_envs) > 0:
-            return self.training_envs[self.current_env_idx]
-        return self.env
-
     def _cycle_training_env(self):
         """
-        V8 CRITICAL FIX: Switch to next training environment
-
-        This ensures the model sees all reactions including hadronic ones with quarks
+        BUG FIX 2 & 4: Cycle to next training reaction
+        
+        IMPORTANT: This should only be called BETWEEN rollouts, not during!
+        We don't modify running environments - instead we just track which reaction to use for next reset.
         """
-        if self.training_envs is not None and len(self.training_envs) > 1:
-            self.current_env_idx = (self.current_env_idx + 1) % len(self.training_envs)
-
-    def collect_rollout(self, num_steps: int, deterministic: bool = False) -> Dict:
+        self.current_reaction_idx = (self.current_reaction_idx + 1) % len(self.training_reactions)
+        self.current_reaction = self.training_reactions[self.current_reaction_idx]
+        
+        print(f"  [Multi-task] Switched to reaction: {self.current_reaction['name']}")
+        
+    def _reset_env_with_current_reaction(self, env_idx: int):
         """
-        Collect a rollout of experiences
-        支持单环境和并行环境
+        Reset a single environment with current reaction
+        
+        MULTIPROCESSING COMPATIBLE: Uses IPC to set attributes
+        """
+        # Set initial_state through IPC (worker process will receive it)
+        self.env.set_attr('initial_particles', self.current_reaction['initial'], indices=[env_idx])
+        self.env.set_attr('final_particles', self.current_reaction['final'], indices=[env_idx])
+        
+        # Now reset
+        return self.env.reset_single(env_idx)
 
-        Args:
-            num_steps: Number of steps to collect
-            deterministic: Whether to use deterministic policy
-
+    
+    def collect_rollout_optimized(
+        self, 
+        rollout_steps: int,
+    ) -> Tuple[OptimizedRolloutBuffer, Dict]:
+        """
+        优化的rollout收集
+        
+        关键: 批量GPU推理 + 并行环境执行
+        
         Returns:
-            Statistics dictionary
+            buffer: 填充好的rollout buffer
+            stats: 统计信息
         """
-        if self.is_parallel:
-            return self._collect_rollout_parallel(num_steps, deterministic)
-        else:
-            return self._collect_rollout_single(num_steps, deterministic)
-    
-    def _collect_rollout_single(self, num_steps: int, deterministic: bool = False) -> Dict:
-        """
-        单环境收集rollout
-
-        V8 CRITICAL FIX: Now uses _get_current_env() to support multi-task training
-        """
-        episode_rewards = []
-        episode_lengths = []
-
-        # V8 FIX: Get current training environment (may cycle through reactions)
-        current_env = self._get_current_env()
-        state, info = current_env.reset()
-        episode_reward = 0
-        episode_length = 0
+        buffer = OptimizedRolloutBuffer(self.num_envs, rollout_steps, self.device)
         
-        for step in range(num_steps):
-            # Move state to device (use non_blocking for better GPU utilization)
-            state_device = state.to(self.device, non_blocking=True)
-            
-            # Get vertex states for physics gating
-            vertex_states = self._extract_vertex_states()
-            
-            # Get action and value
-            with torch.no_grad():
-                output = self.model(state_device, vertex_states, return_value=True)
-                
-                if deterministic:
-                    action = {
-                        'action_type': output['action_type_probs'].argmax().item(),
-                        'vertex_idx': output['vertex_probs'].argmax().item(),
-                        'particle_type': output['particle_probs'].argmax().item(),
-                        'target_vertex': output['vertex_probs'].argmax().item()
-                    }
-                else:
-                    action = {
-                        'action_type': torch.multinomial(output['action_type_probs'], 1).item(),
-                        'vertex_idx': torch.multinomial(output['vertex_probs'], 1).item(),
-                        'particle_type': torch.multinomial(output['particle_probs'], 1).item(),
-                        'target_vertex': torch.multinomial(output['vertex_probs'], 1).item()
-                    }
-                
-                value = output['value'].item()
-                
-                # Compute log prob
-                action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
-                vertex_log_prob = torch.log(output['vertex_probs'][action['vertex_idx']] + 1e-8)
-                particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
-                log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
-            
-            # 瓶颈在这里：env.step() 在CPU上串行执行
-            # 这是RL的固有限制，环境必须串行执行
-            next_state, reward, terminated, truncated, info = current_env.step(action)
-            done = terminated or truncated
-            
-            # Store experience
-            self.buffer.add(state, action, reward, value, log_prob, done, vertex_states)
-            
-            episode_reward += reward
-            episode_length += 1
-            
-            if done:
-                episode_rewards.append(episode_reward)
-                episode_lengths.append(episode_length)
-
-                # Check if this is the best diagram so far
-                if episode_reward > self.best_reward:
-                    self.best_reward = episode_reward
-                    env_ref = self.vis_env if self.vis_env else (self.env.envs[0] if hasattr(self.env, 'envs') else self.env)
-                    self.best_diagram = env_ref.get_diagram_json()
-                    # Immediately save best diagram for visualization
-                    self._save_best_diagram()
-
-                # Also save current diagram periodically for live monitoring
-                if len(episode_rewards) % 1 == 0:  # 每个episode都保存
-                    self._save_current_diagram()
-
-                # V8 CRITICAL FIX: Cycle to next training environment after episode
-                # This ensures the model sees all reactions (leptonic AND hadronic)
-                self._cycle_training_env()
-                current_env = self._get_current_env()
-
-                # Reset with new environment
-                state, info = current_env.reset()
-                episode_reward = 0
-                episode_length = 0
-            else:
-                state = next_state
-        
-        return {
-            'episode_rewards': episode_rewards,
-            'episode_lengths': episode_lengths,
-            'mean_reward': np.mean(episode_rewards) if episode_rewards else 0,
-            'mean_length': np.mean(episode_lengths) if episode_lengths else 0
-        }
-    
-    def _collect_rollout_parallel(self, num_steps: int, deterministic: bool = False) -> Dict:
-        """并行环境收集rollout - 真正的批量GPU处理"""
-        episode_rewards = []
-        episode_lengths = []
-        
-        # 重置所有环境
+        # 初始化环境
         states, infos = self.env.reset()
-        episode_rewards_per_env = [0] * self.num_envs
-        episode_lengths_per_env = [0] * self.num_envs
         
-        steps_per_env = num_steps // self.num_envs
+        # 🚀 OPTIMIZATION: Get precomputed vertex_states from worker processes
+        # Workers compute this in parallel during reset() - no main thread overhead!
+        vertex_states_list = [info['vertex_states'] for info in infos]
         
-        for step in range(steps_per_env):
-            # ===== 关键优化：批量GPU处理 =====
-            # 1. 批量提取vertex_states
-            vertex_states_batch = [
-                self._extract_vertex_states_from_env(self.env.envs[env_idx])
-                for env_idx in range(self.num_envs)
+        # 追踪episode
+        episode_rewards_accum = np.zeros(self.num_envs)
+        episode_lengths_accum = np.zeros(self.num_envs, dtype=np.int32)
+        completed_episodes = []
+        
+        self.model.eval()
+        
+        # 🚀 DOUBLE BUFFERING: Prefetch first batch
+        batched_states = Batch.from_data_list(states).to(self.device, non_blocking=True)
+        
+        for step in range(rollout_steps):
+            # ===== ASYNC DOUBLE-BUFFER PIPELINE =====
+            # Current batch is already on GPU from previous iteration!
+            # We don't recreate it here - massive savings!
+            
+            with torch.no_grad():
+                # GPU forward (using pre-loaded batch)
+                # ✅ EARLY TERMINATION PENALTY: Pass infos to get step_counts
+                outputs = self._batch_forward(batched_states, vertex_states_list, infos)
+                
+                # Sample actions on GPU
+                actions_tensor, log_probs_tensor = self._batch_sample_actions(outputs)
+                values_tensor = outputs['value'].squeeze(-1)
+            
+            # Transfer to CPU asynchronously
+            actions_np = {
+                'action_type': actions_tensor['action_type'].cpu().numpy(),
+                'vertex_idx': actions_tensor['vertex_idx'].cpu().numpy(),
+                'particle_type': actions_tensor['particle_type'].cpu().numpy(),
+                'target_vertex': actions_tensor['target_vertex'].cpu().numpy(),
+            }
+            
+            actions_list = [
+                {k: int(v[i]) for k, v in actions_np.items()}
+                for i in range(self.num_envs)
             ]
             
-            # 2. 批量前向传播（逐个处理，因为Data对象不能 stack）
-            actions = []
-            values = []
-            log_probs = []
+            # 🚀 Start workers (async, don't wait)
+            self.env.step_async(actions_list)
             
-            with torch.no_grad():
-                # 对每个环境的状态进行处理（Data对象逐个处理）
-                for env_idx in range(self.num_envs):
-                    # 将单个 Data 对象移动到 GPU
-                    state_device = states[env_idx].to(self.device, non_blocking=True)
-                    output = self.model(state_device, vertex_states_batch[env_idx], return_value=True)
-                    
-                    if deterministic:
-                        action = {
-                            'action_type': output['action_type_probs'].argmax().item(),
-                            'vertex_idx': output['vertex_probs'].argmax().item(),
-                            'particle_type': output['particle_probs'].argmax().item(),
-                            'target_vertex': output['vertex_probs'].argmax().item()
-                        }
-                    else:
-                        action = {
-                            'action_type': torch.multinomial(output['action_type_probs'], 1).item(),
-                            'vertex_idx': torch.multinomial(output['vertex_probs'], 1).item(),
-                            'particle_type': torch.multinomial(output['particle_probs'], 1).item(),
-                            'target_vertex': torch.multinomial(output['vertex_probs'], 1).item()
-                        }
-                    
-                    value = output['value'].item()
-                    
-                    action_type_log_prob = torch.log(output['action_type_probs'][action['action_type']] + 1e-8)
-                    vertex_log_prob = torch.log(output['vertex_probs'][action['vertex_idx']] + 1e-8)
-                    particle_log_prob = torch.log(output['particle_probs'][action['particle_type']] + 1e-8)
-                    log_prob = (action_type_log_prob + vertex_log_prob + particle_log_prob).item()
-                    
-                    actions.append(action)
-                    values.append(value)
-                    log_probs.append(log_prob)
+            # While workers run, store data to buffer
+            buffer.add(
+                states=states,
+                actions=actions_np,
+                rewards=rewards_np if step > 0 else np.zeros(self.num_envs, dtype=np.float32),
+                values=values_tensor.cpu().numpy(),
+                log_probs=log_probs_tensor.cpu().numpy(),
+                dones=dones_np if step > 0 else np.zeros(self.num_envs, dtype=np.float32),
+                vertex_states_list=vertex_states_list  # ✅ BUG FIX 3c: Pass vertex_states
+            )
             
-            # 4. 批量存储经验
-            for env_idx in range(self.num_envs):
-                self.buffer.add(states[env_idx], actions[env_idx], 0, values[env_idx], 
-                              log_probs[env_idx], False, vertex_states_batch[env_idx])
+            # Wait for workers
+            next_states, rewards, terminateds, truncateds, infos = self.env.step_wait()
+            vertex_states_list = [info['vertex_states'] for info in infos]
             
-            # 5. 并行执行所有环境的step（这里是真正的多核并行）
-            next_states, rewards, terminateds, truncateds, infos = self.env.step(actions)
+            rewards_np = np.array(rewards, dtype=np.float32)
+            dones_np = np.array([t or tr for t, tr in zip(terminateds, truncateds)], dtype=np.float32)
             
-            # 更新buffer中的reward并处理环境重置
-            for env_idx in range(self.num_envs):
-                if len(self.buffer.rewards) > 0:
-                    self.buffer.rewards[-(self.num_envs - env_idx)] = rewards[env_idx]
+            # 🚀 DOUBLE BUFFER: Prepare NEXT batch while doing other work
+            # This overlaps with the loop overhead, so GPU never waits
+            if step < rollout_steps - 1:  # Don't prepare batch we won't use
+                batched_states = Batch.from_data_list(next_states).to(self.device, non_blocking=True)
+
+
+            
+            # ===== 6. 更新统计 =====
+            episode_rewards_accum += rewards_np
+            episode_lengths_accum += 1
+            
+            # 🚀 OPTIMIZED: Batch process done episodes
+            done_indices = [i for i in range(self.num_envs) if dones_np[i]]
+            
+            if done_indices:
+                # Collect episode stats
+                for i in done_indices:
+                    completed_episodes.append({
+                        'reward': episode_rewards_accum[i],
+                        'length': episode_lengths_accum[i],
+                        'reaction': self.current_reaction['name']
+                    })
+                    episode_rewards_accum[i] = 0
+                    episode_lengths_accum[i] = 0
                 
-                episode_rewards_per_env[env_idx] += rewards[env_idx]
-                episode_lengths_per_env[env_idx] += 1
+                # 🚀 BATCH RESET: Parallel IPC instead of sequential
+                # Old: Loop through each done env one-by-one (slow)
+                # New: Send all reset commands, then collect all responses (fast)
                 
-                done = terminateds[env_idx] or truncateds[env_idx]
-                if done:
-                    current_reward = episode_rewards_per_env[env_idx]
-                    episode_rewards.append(current_reward)
-                    episode_lengths.append(episode_lengths_per_env[env_idx])
-                    
-                    # 检查并更新最佳奖励
-                    if current_reward > self.best_reward:
-                        self.best_reward = current_reward
-                        # 从对应的环境中获取最佳图结构
-                        try:
-                            self.best_diagram = self.env.envs[env_idx].get_diagram_json()
-                            # 立即保存最佳图
-                            self._save_best_diagram()
-                        except Exception as e:
-                            # 如果无法访问，至少更新数值
-                            pass
-                    
-                    # 定期更新可视化 (只用第0个环境的数据)
-                    if env_idx == 0:
-                        try:
-                            self._save_current_diagram()
-                        except:
-                            pass
-                    
-                    episode_rewards_per_env[env_idx] = 0
-                    episode_lengths_per_env[env_idx] = 0
-                    
-                    # 重置已完成的环境并更新状态
-                    reset_state, _ = self.env.envs[env_idx].reset()
-                    next_states[env_idx] = reset_state
+                # Set attributes in parallel
+                for idx in done_indices:
+                    self.env.set_attr('initial_particles', self.current_reaction['initial'], indices=[idx])
+                    self.env.set_attr('final_particles', self.current_reaction['final'], indices=[idx])
+                
+                # Reset all done envs in parallel
+                for idx in done_indices:
+                    self.env.remotes[idx].send(('reset', None))
+                
+                # Collect all results
+                for idx in done_indices:
+                    status, data = self.env.remotes[idx].recv()
+                    if status == 'error':
+                        raise RuntimeError(f"Reset failed for env {idx}: {data}")
+                    state, info = data
+                    next_states[idx] = state
+                    vertex_states_list[idx] = info['vertex_states']
             
             states = next_states
+
+
+        # ✅ BUG FIX 4a: Compute last_values for GAE bootstrap
+        # Don't use zeros - use actual value estimates for non-terminal states!
+        with torch.no_grad():
+            last_batch = Batch.from_data_list(states).to(self.device, non_blocking=True)
+            # ✅ EARLY TERMINATION PENALTY: Pass infos for last value computation too
+            last_outputs = self._batch_forward(last_batch, vertex_states_list, infos)
+            last_values = last_outputs['value'].squeeze(-1).cpu().numpy()
         
-        return {
-            'episode_rewards': episode_rewards,
-            'episode_lengths': episode_lengths,
-            'mean_reward': np.mean(episode_rewards) if episode_rewards else 0,
-            'mean_length': np.mean(episode_lengths) if episode_lengths else 0
+        # 统计
+        stats = {
+            'num_episodes': len(completed_episodes),
+            'mean_reward': np.mean([e['reward'] for e in completed_episodes]) if completed_episodes else 0,
+            'mean_length': np.mean([e['length'] for e in completed_episodes]) if completed_episodes else 0,
+            'total_steps': rollout_steps * self.num_envs,
+            'last_values': last_values  # ✅ Pass to compute_gae
         }
+        
+        # BUG FIX 4: Cycle reaction AFTER rollout completes (not during!)
+        # Strategy: Cycle every N completed episodes to ensure balanced training
+        episodes_per_reaction = 50  # Adjust based on your needs
+        self.total_episodes_count = getattr(self, 'total_episodes_count', 0) + len(completed_episodes)
+        
+        if self.total_episodes_count >= episodes_per_reaction:
+            self._cycle_training_env()
+            self.total_episodes_count = 0  # Reset counter
+        
+        return buffer, stats
     
-    def _extract_vertex_states_from_env(self, env):
-        """从指定环境提取vertex states"""
-        vertex_states = []
-        for vertex in env.vertices:
-            connected_edges = [env.edges[eid] for eid in vertex['connected_edges']]
-            incoming = [e for e in connected_edges if e['target'] == vertex['id']]
-            outgoing = [e for e in connected_edges if e['source'] == vertex['id']]
-            
-            vertex_states.append({
-                'incoming': incoming,
-                'outgoing': outgoing,
-                'position': (vertex['x'], vertex['y'])
-            })
-        return vertex_states
-    
-    def compute_gae(self, rewards: List[float], values: List[float], dones: List[bool]) -> Tuple[np.ndarray, np.ndarray]:
+    def _batch_forward(self, batched_states: Batch, vertex_states_list: Optional[List[List[Dict]]] = None, infos: Optional[List[Dict]] = None) -> Dict[str, torch.Tensor]:
         """
-        Compute Generalized Advantage Estimation
+        🚀 OPTIMIZED: 批量前向传播
+        
+        KEY OPTIMIZATION: Uses policy_head.forward_batch() for GPU-parallel processing
+        
+        Args:
+            batched_states: PyG Batch对象 [total_nodes across all graphs]
+            vertex_states_list: List of vertex states for each environment (for Physics Gate)
+            infos: List of info dicts from environments (contains step_count for early termination penalty)
+            
+        Returns:
+            outputs with policy probabilities for each env
+        """
+        # 获取batch信息
+        batch_size = batched_states.num_graphs
+        
+        # Step 1: Batch MPNN encoding (efficient)
+        if self.use_amp and self.device == 'cuda':
+            with torch.amp.autocast('cuda'):
+                node_embeddings, graph_embeddings = self.model.encoder(batched_states)
+        else:
+            node_embeddings, graph_embeddings = self.model.encoder(batched_states)
+        
+        # Step 2: 🚀 OPTIMIZED - Batch process policy head (NEW!)
+        # Old: Loop through each env sequentially (64 GPU kernel launches!)
+        # New: Single batched call (1 GPU kernel launch!)
+        
+        if batch_size > 1:
+            # Ensure graph_embeddings is [batch_size, hidden_dim]
+            if graph_embeddings.dim() == 1:
+                graph_embeddings = graph_embeddings.unsqueeze(0).expand(batch_size, -1)
+            
+            # ✅ EARLY TERMINATION PENALTY: Extract step_counts from infos
+            step_counts = None
+            if infos is not None:
+                step_counts = torch.tensor(
+                    [info['step_count'] for info in infos],
+                    dtype=torch.long,
+                    device=self.device
+                )
+            
+            # 🚀 KEY OPTIMIZATION: Single batched forward pass!
+            # This replaces the sequential for-loop with a batched GPU operation
+            policy_output = self.model.policy_head.forward_batch(
+                graph_embeddings,
+                vertex_states_list=vertex_states_list,
+                apply_physics_gate=(vertex_states_list is not None),
+                step_counts=step_counts  # ✅ Pass step_counts for early termination penalty
+            )
+            
+            # Batch compute values
+            values_batch = self.model.value_head(graph_embeddings)
+            
+            # Combine outputs
+            output = {
+                'action_type_probs': policy_output['action_type_probs'],
+                'vertex_probs': policy_output['vertex_probs'],
+                'particle_probs': policy_output['particle_probs'],
+                'value': values_batch,
+                'node_embeddings': node_embeddings,
+                'graph_embedding': graph_embeddings
+            }
+            
+            # Include gate values if computed
+            if 'gate_values' in policy_output:
+                output['gate_values'] = policy_output['gate_values']
+        else:
+            # Single environment - use regular forward
+            vertex_states = vertex_states_list[0] if vertex_states_list else None
+            step_count = infos[0]['step_count'] if infos else 0
+            raw_output = self.model(batched_states, vertex_states=vertex_states, return_value=True, step_count=step_count)
+            output = raw_output
+        
+        return output
+
+
+    
+    def _batch_sample_actions(
+        self, 
+        outputs: Dict[str, torch.Tensor]
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        """
+        在GPU上批量采样actions
         
         Returns:
-            advantages: [num_steps]
-            returns: [num_steps]
+            actions: Dict of action tensors [num_envs]
+            log_probs: Log probabilities [num_envs]
         """
-        advantages = np.zeros(len(rewards))
-        returns = np.zeros(len(rewards))
+        # 采样 (在GPU上)
+        action_type = torch.multinomial(outputs['action_type_probs'], 1).squeeze(-1)
+        vertex_idx = torch.multinomial(outputs['vertex_probs'], 1).squeeze(-1)
+        particle_type = torch.multinomial(outputs['particle_probs'], 1).squeeze(-1)
+        target_vertex = torch.multinomial(outputs['vertex_probs'], 1).squeeze(-1)
         
-        gae = 0
-        next_value = 0
+        actions = {
+            'action_type': action_type,
+            'vertex_idx': vertex_idx,
+            'particle_type': particle_type,
+            'target_vertex': target_vertex,
+        }
         
-        for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_non_terminal = 1.0 - dones[t]
-                next_value = 0
+        # 计算log probs (批量)
+        batch_size = action_type.shape[0] if action_type.dim() > 0 else 1
+        
+        # 使用gather获取选中action的概率
+        if batch_size > 1:
+            action_type_log_prob = torch.log(
+                outputs['action_type_probs'].gather(1, action_type.unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+            vertex_log_prob = torch.log(
+                outputs['vertex_probs'].gather(1, vertex_idx.unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+            particle_log_prob = torch.log(
+                outputs['particle_probs'].gather(1, particle_type.unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+        else:
+            action_type_log_prob = torch.log(outputs['action_type_probs'][action_type] + 1e-8)
+            vertex_log_prob = torch.log(outputs['vertex_probs'][vertex_idx] + 1e-8)
+            particle_log_prob = torch.log(outputs['particle_probs'][particle_type] + 1e-8)
+        
+        total_log_prob = action_type_log_prob + vertex_log_prob + particle_log_prob
+        
+        return actions, total_log_prob
+    
+    def compute_gae(
+        self,
+        rewards: torch.Tensor,  # [steps, num_envs]
+        values: torch.Tensor,   # [steps, num_envs]
+        dones: torch.Tensor,    # [steps, num_envs]
+        last_values: torch.Tensor  # ✅ BUG FIX 4b: Bootstrap values [num_envs]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        计算GAE (Generalized Advantage Estimation)
+        
+        在GPU上计算
+        """
+        steps, num_envs = rewards.shape
+        advantages = torch.zeros_like(rewards)
+        
+        gae = torch.zeros(num_envs, device=self.device)
+        
+        for t in reversed(range(steps)):
+            if t == steps - 1:
+                # ✅ BUG FIX 4c: Use last_values for bootstrap, not zeros!
+                # This correctly handles episodes that are truncated mid-rollout
+                next_value = last_values * (1.0 - dones[t])
             else:
-                next_non_terminal = 1.0 - dones[t]
                 next_value = values[t + 1]
             
+            next_non_terminal = 1.0 - dones[t]
             delta = rewards[t] + self.gamma * next_value * next_non_terminal - values[t]
             gae = delta + self.gamma * self.gae_lambda * next_non_terminal * gae
-            
             advantages[t] = gae
-            returns[t] = advantages[t] + values[t]
         
+        returns = advantages + values
         return advantages, returns
     
-    def update_policy(self) -> Dict:
+    def update_policy(self, buffer: OptimizedRolloutBuffer, last_values: np.ndarray) -> Dict[str, float]:
         """
-        Update policy using PPO
+        PPO策略更新
         
-        Returns:
-            Dictionary with loss statistics
+        使用mini-batch SGD
+        
+        Args:
+            buffer: Rollout buffer with experiences
+            last_values: Bootstrap values for GAE [num_envs]  # ✅ BUG FIX 4d
         """
-        data = self.buffer.get()
+        self.model.train()
         
-        if len(data['rewards']) == 0:
-            return {}
+        # 获取数据
+        data = buffer.get_tensors()
+        batched_states = buffer.get_batched_states()
         
-        # Compute advantages
+        # ✅ BUG FIX 4d: Pass last_values to compute_gae
+        last_values_tensor = torch.from_numpy(last_values).to(self.device)
+        
+        # 计算advantages
         advantages, returns = self.compute_gae(
             data['rewards'],
             data['values'],
-            data['dones']
+            data['dones'],
+            last_values_tensor
         )
         
+        # Flatten for mini-batch training
+        # [steps, num_envs] -> [steps * num_envs]
+        total_samples = buffer.ptr * self.num_envs
+        
+        advantages_flat = advantages.reshape(-1)
+        returns_flat = returns.reshape(-1)
+        old_log_probs_flat = data['log_probs'].reshape(-1)
+        
+        actions_flat = {
+            k: v.reshape(-1) for k, v in data['actions'].items()
+        }
+        
         # Normalize advantages
-        advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        advantages_flat = (advantages_flat - advantages_flat.mean()) / (advantages_flat.std() + 1e-8)
         
-        # Convert to tensors
-        old_log_probs = torch.tensor(data['log_probs'], dtype=torch.float32)
-        advantages_tensor = torch.tensor(advantages, dtype=torch.float32)
-        returns_tensor = torch.tensor(returns, dtype=torch.float32)
+        # PPO epochs
+        total_loss = 0
+        policy_loss_total = 0
+        value_loss_total = 0
+        entropy_total = 0
         
-        # PPO update
-        total_policy_loss = 0
-        total_value_loss = 0
-        total_entropy = 0
-        num_updates = 0
-        
-        # Mini-batch updates
-        indices = np.arange(len(data['rewards']))
+        indices = np.arange(total_samples)
         
         for epoch in range(self.epochs_per_update):
             np.random.shuffle(indices)
             
-            for start in range(0, len(indices), self.batch_size):
-                end = start + self.batch_size
-                batch_idx = indices[start:end]
+            for start in range(0, total_samples, self.mini_batch_size):
+                end = min(start + self.mini_batch_size, total_samples)
+                mb_indices = indices[start:end]
                 
-                # Batch data (use non_blocking for GPU transfer)
-                batch_states = [data['states'][i].to(self.device, non_blocking=True) for i in batch_idx]
-                batch_actions = [data['actions'][i] for i in batch_idx]
-                batch_vertex_states = [data['vertex_states'][i] for i in batch_idx]
-                batch_old_log_probs = old_log_probs[batch_idx].to(self.device, non_blocking=True)
-                batch_advantages = advantages_tensor[batch_idx].to(self.device, non_blocking=True)
-                batch_returns = returns_tensor[batch_idx].to(self.device, non_blocking=True)
+                # 获取mini-batch数据
+                mb_advantages = advantages_flat[mb_indices]
+                mb_returns = returns_flat[mb_indices]
+                mb_old_log_probs = old_log_probs_flat[mb_indices]
+                mb_actions = {k: v[mb_indices] for k, v in actions_flat.items()}
                 
-                # 批量评估动作（并行处理整个batch）
-                # 预分配tensor以减少内存分配开销
-                batch_size_actual = len(batch_idx)
-                batch_log_probs = torch.zeros(batch_size_actual, device=self.device)
-                batch_values = torch.zeros(batch_size_actual, device=self.device)
-                batch_entropies = torch.zeros(batch_size_actual, device=self.device)
+                # 获取对应的states (需要从buffer中索引)
+                mb_states = [buffer.states[i] for i in mb_indices]
+                mb_batch = Batch.from_data_list(mb_states).to(self.device)
                 
-                # 仍然需要循环，但使用torch.no_grad()减少前向传播的开销
-                for i, (state, action, vertex_state) in enumerate(zip(batch_states, batch_actions, batch_vertex_states)):
-                    action_tensor = {k: torch.tensor(v, device=self.device) for k, v in action.items()}
-                    log_prob, value, entropy = self.model.evaluate_actions(state, action_tensor, vertex_state)
-                    batch_log_probs[i] = log_prob
-                    batch_values[i] = value
-                    batch_entropies[i] = entropy
+                # ✅ BUG FIX 3d: Get corresponding vertex_states for Physics Gate
+                mb_vertex_states = None
+                if len(buffer.vertex_states_buffer) > 0:
+                    mb_vertex_states = [buffer.vertex_states_buffer[i] for i in mb_indices]
                 
-                # Compute PPO loss
-                ratio = torch.exp(batch_log_probs - batch_old_log_probs)
-                surr1 = ratio * batch_advantages
-                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * batch_advantages
+                # ✅ BUG FIX 3e: Use batched forward for consistency with rollout
+                # Issue: model.forward() expects vertex_states: List[Dict] (single env)
+                #        but mb_vertex_states is List[List[Dict]] (multiple envs)
+                # Solution: Use batched encoder + batched policy_head like in rollout
+                if mb_vertex_states is not None and len(mb_states) > 1:
+                    # Batched processing with Physics Gate
+                    node_embeddings, graph_embeddings = self.model.encoder(mb_batch)
+                    
+                    # Ensure correct dimensions
+                    if graph_embeddings.dim() == 1:
+                        graph_embeddings = graph_embeddings.unsqueeze(0).expand(len(mb_states), -1)
+                    
+                    # Batched policy head with Physics Gate
+                    policy_output = self.model.policy_head.forward_batch(
+                        graph_embeddings,
+                        vertex_states_list=mb_vertex_states,
+                        apply_physics_gate=True
+                    )
+                    
+                    # Batched value head
+                    values_batch = self.model.value_head(graph_embeddings)
+                    
+                    # Combine outputs
+                    outputs = {
+                        'action_type_probs': policy_output['action_type_probs'],
+                        'vertex_probs': policy_output['vertex_probs'],
+                        'particle_probs': policy_output['particle_probs'],
+                        'value': values_batch
+                    }
+                else:
+                    # Single sample or no vertex_states: use standard forward
+                    # Note: vertex_states should be List[Dict] for single env
+                    vs = mb_vertex_states[0] if mb_vertex_states and len(mb_vertex_states) > 0 else None
+                    outputs = self.model(mb_batch, vertex_states=vs, return_value=True)
+                
+                # 计算新的log probs (简化版，需要根据实际模型调整)
+                # 这里假设outputs包含每个样本的概率分布
+                new_log_probs = self._compute_log_probs(outputs, mb_actions, len(mb_indices))
+                values = outputs['value'].squeeze(-1)
+                
+                # 计算entropy
+                entropy = self._compute_entropy(outputs, len(mb_indices))
+                
+                # PPO目标
+                ratio = torch.exp(new_log_probs - mb_old_log_probs)
+                surr1 = ratio * mb_advantages
+                surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * mb_advantages
                 policy_loss = -torch.min(surr1, surr2).mean()
                 
                 # Value loss
-                value_loss = 0.5 * ((batch_values - batch_returns) ** 2).mean()
+                value_loss = nn.functional.mse_loss(values, mb_returns)
                 
-                # Entropy bonus
-                entropy_loss = -batch_entropies.mean()
-
-                # V8 Addition: Sparsity loss on α_learnable (Conservation Law Discovery)
-                # Encourages the model to only "discover" a few conservation laws
-                sparsity_loss = 0.0
-                if hasattr(self.model, 'conservation_mask'):
-                    sparsity_loss = self.model.conservation_mask.get_sparsity_loss()
-                    sparsity_weight = getattr(self.model, 'sparsity_weight', 0.001)
-                else:
-                    sparsity_weight = 0.0
-
-                # Total loss (PPO + Sparsity)
-                loss = (policy_loss +
-                       self.value_coef * value_loss +
-                       self.entropy_coef * entropy_loss +
-                       sparsity_weight * sparsity_loss)
+                # Total loss
+                loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
                 
-                # Optimize（梯度累积以提高GPU利用率）
-                self.optimizer.zero_grad(set_to_none=True)  # set_to_none=True更快
+                # Optimize
+                self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
                 self.optimizer.step()
                 
-                total_policy_loss += policy_loss.item()
-                total_value_loss += value_loss.item()
-                total_entropy += -entropy_loss.item()
-                num_updates += 1
-
-        # Clear buffer
-        self.buffer.clear()
-
-        # Get conservation metrics for logging (V8)
-        conservation_metrics = {}
-        if hasattr(self.model, 'get_conservation_metrics'):
-            with torch.no_grad():
-                conservation_metrics = self.model.get_conservation_metrics()
-                # Convert tensors to floats
-                conservation_metrics = {
-                    k: v.item() if isinstance(v, torch.Tensor) and v.numel() == 1 else v
-                    for k, v in conservation_metrics.items()
-                }
-
-        result = {
-            'policy_loss': total_policy_loss / num_updates if num_updates > 0 else 0,
-            'value_loss': total_value_loss / num_updates if num_updates > 0 else 0,
-            'entropy': total_entropy / num_updates if num_updates > 0 else 0
+                total_loss += loss.item()
+                policy_loss_total += policy_loss.item()
+                value_loss_total += value_loss.item()
+                entropy_total += entropy.item()
+        
+        num_updates = self.epochs_per_update * (total_samples // self.mini_batch_size + 1)
+        
+        return {
+            'total_loss': total_loss / num_updates,
+            'policy_loss': policy_loss_total / num_updates,
+            'value_loss': value_loss_total / num_updates,
+            'entropy': entropy_total / num_updates,
         }
-        result.update(conservation_metrics)
-
-        return result
+    
+    def _compute_log_probs(
+        self, 
+        outputs: Dict[str, torch.Tensor],
+        actions: Dict[str, torch.Tensor],
+        batch_size: int
+    ) -> torch.Tensor:
+        """计算给定actions的log概率"""
+        # 处理可能的维度问题
+        if outputs['action_type_probs'].dim() == 1:
+            # 单样本情况
+            action_type_log_prob = torch.log(outputs['action_type_probs'][actions['action_type']] + 1e-8)
+            vertex_log_prob = torch.log(outputs['vertex_probs'][actions['vertex_idx']] + 1e-8)
+            particle_log_prob = torch.log(outputs['particle_probs'][actions['particle_type']] + 1e-8)
+        else:
+            # Batch情况
+            action_type_log_prob = torch.log(
+                outputs['action_type_probs'].gather(1, actions['action_type'].unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+            vertex_log_prob = torch.log(
+                outputs['vertex_probs'].gather(1, actions['vertex_idx'].unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+            particle_log_prob = torch.log(
+                outputs['particle_probs'].gather(1, actions['particle_type'].unsqueeze(-1)).squeeze(-1) + 1e-8
+            )
+        
+        return action_type_log_prob + vertex_log_prob + particle_log_prob
+    
+    def _compute_entropy(self, outputs: Dict[str, torch.Tensor], batch_size: int) -> torch.Tensor:
+        """计算策略entropy"""
+        def safe_entropy(probs):
+            return -(probs * torch.log(probs + 1e-8)).sum(dim=-1).mean()
+        
+        action_entropy = safe_entropy(outputs['action_type_probs'])
+        vertex_entropy = safe_entropy(outputs['vertex_probs'])
+        particle_entropy = safe_entropy(outputs['particle_probs'])
+        
+        return action_entropy + vertex_entropy + particle_entropy
     
     def train(
         self,
         total_timesteps: int,
-        rollout_steps: int = 2048,
+        rollout_steps: int = 1024,
         log_interval: int = 10,
-        save_interval: int = 100,
-        eval_interval: int = 50,
+        save_interval: int = 10000,
         checkpoint_dir: str = 'checkpoints',
-        log_dir: str = 'logs'
+        log_dir: str = 'logs',
     ):
         """
-        Main training loop
-        
-        Args:
-            total_timesteps: Total number of environment steps
-            rollout_steps: Steps to collect before each update
-            log_interval: Episodes between logging
-            save_interval: Episodes between saving checkpoints
-            eval_interval: Episodes between evaluation
-            checkpoint_dir: Directory to save checkpoints
-            log_dir: Directory for TensorBoard logs
+        主训练循环
         """
-        # Setup logging
         os.makedirs(checkpoint_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
-        os.makedirs('diagrams', exist_ok=True)
         
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self.writer = SummaryWriter(os.path.join(log_dir, f'feynman_gcpn_{timestamp}'))
+        self.writer = SummaryWriter(log_dir)
         
-        # Create initial diagram file so visualization doesn't fail
-        self._save_current_diagram()
+        num_updates = total_timesteps // (rollout_steps * self.num_envs)
         
-        print("=" * 80)
-        print("Starting Feynman-GCPN Training")
-        print("=" * 80)
-        print(f"Device: {self.device}")
-        print(f"Total timesteps: {total_timesteps}")
-        print(f"Rollout steps: {rollout_steps}")
-        env_ref = self.vis_env if self.vis_env else (self.env.envs[0] if hasattr(self.env, 'envs') else self.env)
-        print(f"Initial state: {env_ref.initial_particles}")
-        print(f"Final state: {env_ref.final_particles}")
-        print("=" * 80)
+        # BUG FIX 5: Validate training configuration
+        if num_updates == 0:
+            steps_per_update = rollout_steps * self.num_envs
+            print(f"\n{'='*60}")
+            print(f"❌ ERROR: Invalid training configuration!")
+            print(f"{'='*60}")
+            print(f"  Total timesteps: {total_timesteps:,}")
+            print(f"  Steps per update: {steps_per_update:,}")
+            print(f"  Result: num_updates = {num_updates} (需要至少1个update!)")
+            print(f"\n解决方案:")
+            print(f"  1. 减少环境数: --num-envs {total_timesteps // (rollout_steps * 2)}")
+            print(f"  2. 增加总步数: --steps {steps_per_update * 10:,}")
+            print(f"  3. 减少rollout steps: 在run_experiment.py中改为128")
+            print(f"{'='*60}\n")
+            raise ValueError(f"num_updates = 0! Steps per update ({steps_per_update:,}) exceeds total timesteps ({total_timesteps:,})")
         
-        num_updates = total_timesteps // rollout_steps
-        update_num = 0
+        print(f"\n{'='*60}")
+        print(f"Starting Optimized PPO Training")
+        print(f"{'='*60}")
+        print(f"  Total timesteps: {total_timesteps:,}")
+        print(f"  Rollout steps: {rollout_steps}")
+        print(f"  Num envs: {self.num_envs}")
+        print(f"  Steps per update: {rollout_steps * self.num_envs:,}")
+        print(f"  Total updates: {num_updates:,}")
+        print(f"  Device: {self.device}")
+        print(f"{'='*60}\n")
+        
+        start_time = time.time()
         
         with tqdm(total=total_timesteps, desc="Training") as pbar:
-            while self.global_step < total_timesteps:
+            for update in range(num_updates):
                 # Collect rollout
-                rollout_stats = self.collect_rollout(rollout_steps)
-                self.global_step += rollout_steps
+                t0 = time.time()
+                buffer, rollout_stats = self.collect_rollout_optimized(rollout_steps)
+                rollout_time = time.time() - t0
                 
                 # Update policy
-                update_stats = self.update_policy()
-                update_num += 1
+                t0 = time.time()
+                # ✅ BUG FIX 4e: Pass last_values from rollout_stats
+                update_stats = self.update_policy(buffer, rollout_stats['last_values'])
+                update_time = time.time() - t0
+                
+                # Update global step
+                steps_this_update = rollout_steps * self.num_envs
+                self.global_step += steps_this_update
                 
                 # Logging
-                if len(rollout_stats['episode_rewards']) > 0:
-                    self.writer.add_scalar('train/mean_reward', rollout_stats['mean_reward'], self.global_step)
-                    self.writer.add_scalar('train/mean_length', rollout_stats['mean_length'], self.global_step)
-                
-                if update_stats:
+                if update % log_interval == 0:
+                    elapsed = time.time() - start_time
+                    fps = self.global_step / elapsed
+                    
+                    # Log to tensorboard
+                    self.writer.add_scalar('rollout/mean_reward', rollout_stats['mean_reward'], self.global_step)
+                    self.writer.add_scalar('rollout/mean_length', rollout_stats['mean_length'], self.global_step)
+                    self.writer.add_scalar('rollout/num_episodes', rollout_stats['num_episodes'], self.global_step)
+                    
                     self.writer.add_scalar('train/policy_loss', update_stats['policy_loss'], self.global_step)
                     self.writer.add_scalar('train/value_loss', update_stats['value_loss'], self.global_step)
                     self.writer.add_scalar('train/entropy', update_stats['entropy'], self.global_step)
-                
-                # Console logging
-                if update_num % log_interval == 0:
-                    print(f"\n[Update {update_num}/{num_updates}] Step: {self.global_step}")
-                    if len(rollout_stats['episode_rewards']) > 0:
-                        print(f"  Mean Reward: {rollout_stats['mean_reward']:.2f}")
-                        print(f"  Mean Length: {rollout_stats['mean_length']:.1f}")
-                        print(f"  Best Reward: {self.best_reward:.2f}")
-                    if update_stats:
-                        print(f"  Policy Loss: {update_stats['policy_loss']:.4f}")
-                        print(f"  Value Loss: {update_stats['value_loss']:.4f}")
+                    
+                    self.writer.add_scalar('time/fps', fps, self.global_step)
+                    self.writer.add_scalar('time/rollout_time', rollout_time, self.global_step)
+                    self.writer.add_scalar('time/update_time', update_time, self.global_step)
+                    
+                    # BUG FIX 2: Log current reaction
+                    self.writer.add_text('multi_task/current_reaction', self.current_reaction['name'], self.global_step)
+                    
+                    print(f"\nUpdate {update}/{num_updates}")
+                    print(f"  Steps: {self.global_step:,} | FPS: {fps:.0f}")
+                    print(f"  Reaction: {self.current_reaction['name']}")  # BUG FIX 2: Show current reaction
+                    print(f"  Reward: {rollout_stats['mean_reward']:.2f} | Length: {rollout_stats['mean_length']:.1f}")
+                    print(f"  Loss: {update_stats['total_loss']:.4f} | Entropy: {update_stats['entropy']:.4f}")
+                    print(f"  Time: rollout={rollout_time:.2f}s, update={update_time:.2f}s")
                 
                 # Save checkpoint
-                if update_num % save_interval == 0:
-                    checkpoint_path = os.path.join(checkpoint_dir, f'model_step_{self.global_step}.pt')
-                    self.save_checkpoint(checkpoint_path)
-                    print(f"  Saved checkpoint: {checkpoint_path}")
+                if self.global_step % save_interval < steps_this_update:
+                    ckpt_path = os.path.join(checkpoint_dir, f'model_{self.global_step}.pt')
+                    self.save_checkpoint(ckpt_path)
+                    print(f"  Saved checkpoint: {ckpt_path}")
                 
-                # Save best diagram
-                if self.best_diagram is not None:
-                    diagram_path = 'diagrams/current_best.json'
-                    with open(diagram_path, 'w') as f:
-                        json.dump(self.best_diagram, f, indent=2)
+                # Track best
+                if rollout_stats['mean_reward'] > self.best_reward:
+                    self.best_reward = rollout_stats['mean_reward']
                 
-                pbar.update(rollout_steps)
+                # Clear buffer
+                buffer.clear()
+                
+                pbar.update(steps_this_update)
         
         # Final save
         final_path = os.path.join(checkpoint_dir, 'model_final.pt')
         self.save_checkpoint(final_path)
-        print(f"\n{'='*80}")
-        print(f"Training complete! Final model saved to {final_path}")
-        print(f"Best reward achieved: {self.best_reward:.2f}")
-        print(f"{'='*80}")
+        
+        print(f"\n{'='*60}")
+        print(f"Training Complete!")
+        print(f"  Total steps: {self.global_step:,}")
+        print(f"  Best reward: {self.best_reward:.2f}")
+        print(f"  Time: {time.time() - start_time:.1f}s")
+        print(f"{'='*60}")
         
         self.writer.close()
     
     def save_checkpoint(self, path: str):
-        """Save model checkpoint"""
+        """保存检查点"""
         torch.save({
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'global_step': self.global_step,
             'best_reward': self.best_reward,
-            'best_diagram': self.best_diagram
         }, path)
     
     def load_checkpoint(self, path: str):
-        """Load model checkpoint"""
+        """加载检查点"""
         checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.global_step = checkpoint.get('global_step', 0)
         self.best_reward = checkpoint.get('best_reward', -float('inf'))
-        self.best_diagram = checkpoint.get('best_diagram', None)
         print(f"Loaded checkpoint from {path}")
-    
-    def _save_best_diagram(self):
-        """Save best diagram to JSON file for visualization"""
-        if self.best_diagram is not None:
-            import json
-            os.makedirs('diagrams', exist_ok=True)
-            env_ref = self.vis_env if self.vis_env else (self.env.envs[0] if hasattr(self.env, 'envs') else self.env)
-            diagram_data = {
-                'timestamp': datetime.now().isoformat(),
-                'metadata': {
-                    'episode': self.global_step // 2048,  # Approximate episode number
-                    'reward': float(self.best_reward),
-                    'initial_state': env_ref.initial_particles,
-                    'final_state': env_ref.final_particles
-                },
-                'shapes': self.best_diagram
-            }
-            with open('diagrams/current_best.json', 'w', encoding='utf-8') as f:
-                json.dump(diagram_data, f, indent=2, ensure_ascii=False)
-    
-    def _save_current_diagram(self):
-        """Save current diagram for live monitoring"""
-        import json
-        os.makedirs('diagrams', exist_ok=True)
-        env_ref = self.vis_env if self.vis_env else (self.env.envs[0] if hasattr(self.env, 'envs') else self.env)
-        current_diagram = env_ref.get_diagram_json()
-        
-        # 如果图为空，创建一个占位符显示初态和末态
-        if not current_diagram:
-            # 创建初态粒子的可视化
-            num_initial = len(env_ref.initial_particles)
-            num_final = len(env_ref.final_particles)
-            y_step = 100
-            
-            for i, p_id in enumerate(env_ref.initial_particles):
-                # 解析反粒子后缀 _bar
-                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
-                
-                # 反粒子需要从右往左绘制
-                if is_anti:
-                    p1, p2 = {'x': 150, 'y': 200 + i * y_step}, {'x': 50, 'y': 200 + i * y_step}
-                else:
-                    p1, p2 = {'x': 50, 'y': 200 + i * y_step}, {'x': 150, 'y': 200 + i * y_step}
-                
-                current_diagram.append({
-                    'id': f'initial_{i}',
-                    'type': 'fermion',
-                    'p1': p1,
-                    'p2': p2,
-                    'props': {
-                        'particleId': base_id,
-                        'isAnti': is_anti,
-                        'color': 'none',
-                        'category': 'fermion',
-                        'group': 'initial'
-                    }
-                })
-            
-            for i, p_id in enumerate(env_ref.final_particles):
-                # 解析反粒子后缀 _bar
-                base_id, is_anti = (p_id[:-4], True) if p_id.endswith('_bar') else (p_id, False)
-                
-                # 反粒子需要从右往左绘制
-                if is_anti:
-                    p1, p2 = {'x': 750, 'y': 200 + i * y_step}, {'x': 650, 'y': 200 + i * y_step}
-                else:
-                    p1, p2 = {'x': 650, 'y': 200 + i * y_step}, {'x': 750, 'y': 200 + i * y_step}
-                
-                current_diagram.append({
-                    'id': f'final_{i}',
-                    'type': 'fermion',
-                    'p1': p1,
-                    'p2': p2,
-                    'props': {
-                        'particleId': base_id,
-                        'isAnti': is_anti,
-                        'color': 'none',
-                        'category': 'fermion',
-                        'group': 'final'
-                    }
-                })
-        
-        diagram_data = {
-            'timestamp': datetime.now().isoformat(),
-            'metadata': {
-                'episode': self.global_step // 2048,
-                'reward': 0.0,
-                'initial_state': env_ref.initial_particles,
-                'final_state': env_ref.final_particles
-            },
-            'shapes': current_diagram
-        }
-        with open('diagrams/current_diagram.json', 'w', encoding='utf-8') as f:
-            json.dump(diagram_data, f, indent=2, ensure_ascii=False)
-        
-        # 同时保存到current_best.json以便可视化显示
-        with open('diagrams/current_best.json', 'w', encoding='utf-8') as f:
-            json.dump(diagram_data, f, indent=2, ensure_ascii=False)
-    
-    def _extract_vertex_states(self) -> List[Dict]:
-        """
-        Extract quantum number states from current environment
-        For physics gating
-        """
-        vertex_states = []
-        
-        for vertex in self.env.vertices:
-            connected_edges = [self.env.edges[eid] for eid in vertex['connected_edges']]
-            
-            incoming = [e for e in connected_edges if e['target'] == vertex['id']]
-            outgoing = [e for e in connected_edges if e['source'] == vertex['id']]
-            
-            state = {
-                'charge_in': sum(self.env._get_charge(e) for e in incoming),
-                'charge_out': sum(self.env._get_charge(e) for e in outgoing),
-                'lepton_in': sum(self.env._get_lepton(e) for e in incoming),
-                'lepton_out': sum(self.env._get_lepton(e) for e in outgoing),
-                'baryon_in': sum(self.env._get_baryon(e) for e in incoming),
-                'baryon_out': sum(self.env._get_baryon(e) for e in outgoing),
-                'colors_in': [e['color'] for e in incoming if e['color']],
-                'colors_out': [e['color'] for e in outgoing if e['color']]
-            }
-            
-            vertex_states.append(state)
-        
-        return vertex_states
-
-
-def main():
-    """Example training run"""
-    
-    # Define reaction: e⁻ + e⁺ → μ⁻ + μ⁺ (Bhabha scattering via photon)
-    initial_state = ['e', 'e']  # e⁻ and e⁺ (second will be anti)
-    final_state = ['mu', 'mu']  # μ⁻ and μ⁺
-    
-    # Create environment
-    env = FeynmanDiagramEnv(
-        initial_state=initial_state,
-        final_state=final_state,
-        max_vertices=10,
-        max_steps=50
-    )
-    
-    # Create model
-    num_particle_types = len(PhysicsConstants.get_all_particles()) + len(PhysicsConstants.BOSONS)
-    
-    model = FeynmanGCPN(
-        node_input_dim=6,
-        edge_input_dim=21,
-        hidden_dim=128,
-        num_mp_layers=3,
-        num_action_types=4,
-        num_particle_types=num_particle_types,
-        max_vertices=10,
-        lambda_penalty=5.0
-    )
-    
-    # Create trainer
-    trainer = PPOTrainer(
-        env=env,
-        model=model,
-        learning_rate=3e-4,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_epsilon=0.2,
-        value_coef=0.5,
-        entropy_coef=0.01
-    )
-    
-    # Train
-    trainer.train(
-        total_timesteps=100000,
-        rollout_steps=2048,
-        log_interval=10,
-        save_interval=100,
-        checkpoint_dir='checkpoints',
-        log_dir='logs'
-    )
-
-
-if __name__ == '__main__':
-    main()

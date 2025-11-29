@@ -225,13 +225,19 @@ class ConservationLawEvaluator:
         Returns:
             (success, violated_baryon)
         """
-        obs, _ = env.reset()
+        obs, info = env.reset()  # ✅ BUG FIX 13: Get info dict
         done = False
         steps = 0
 
         with torch.no_grad():
             while not done and steps < max_steps:
-                action = self.model.get_action(obs.to(self.device), deterministic=True)
+                # ✅ BUG FIX 13: Pass vertex_states to model for Physics Gate
+                vertex_states = info.get('vertex_states', None)
+                action = self.model.get_action(
+                    obs.to(self.device), 
+                    vertex_states=vertex_states,  # Pass vertex_states!
+                    deterministic=True
+                )
                 obs, reward, terminated, truncated, info = env.step(action)
                 done = terminated or truncated
                 steps += 1

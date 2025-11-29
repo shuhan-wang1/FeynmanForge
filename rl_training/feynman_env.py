@@ -187,8 +187,14 @@ class FeynmanDiagramEnv(gym.Env):
             self.terminated = True
             num_internal_edges = sum(1 for e in self.edges if not e['is_external'])
             is_connected = self._is_graph_connected()
-            if num_internal_edges < 1 or not is_connected:
-                reward -= 20.0  # Penalize lazy termination
+            
+            # ✅ EARLY TERMINATION PENALTY: Discourage early termination
+            if self.step_count < 5:
+                # Strong penalty for terminating too early
+                reward -= 50.0
+            elif num_internal_edges < 1 or not is_connected:
+                # Regular lazy termination penalty
+                reward -= 20.0
             else:
                 reward += self._compute_terminal_reward()
             
@@ -659,13 +665,51 @@ class FeynmanDiagramEnv(gym.Env):
             
         return Data(x=x, edge_index=edge_index_tensor, edge_attr=edge_attr)
 
+    def _get_vertex_states(self) -> List[Dict]:
+        """
+        🚀 OPTIMIZATION: Pre-calculate vertex states for Physics Gate
+        
+        This runs in the worker process during step()/reset(), so it's parallelized!
+        Main training process just reads the result from info dict.
+        """
+        vertex_info = []
+        for v_idx, vertex in enumerate(self.vertices):
+            v_state = {
+                'incoming': [],
+                'outgoing': [],
+                'type': vertex.get('type', 'interaction')
+            }
+            
+            # Extract connected edges for this vertex
+            for edge in self.edges:
+                # Skip consumed edges
+                if edge.get('state') == 'consumed':
+                    continue
+                
+                # ✅ BUG FIX 1: Include is_anti flag for correct quantum number calculation
+                p_info = {
+                    'particle_id': edge.get('particle_id', 'photon'),
+                    'is_anti': edge.get('is_anti', False)  # CRITICAL for反粒子quantum numbers!
+                }
+                
+                # Check edge direction
+                if edge.get('target') == v_idx:
+                    v_state['incoming'].append(p_info)
+                elif edge.get('source') == v_idx:
+                    v_state['outgoing'].append(p_info)
+            
+            vertex_info.append(v_state)
+        return vertex_info
+    
     def _get_info(self) -> Dict:
         return {
             'num_vertices': len(self.vertices),
             'num_edges': len(self.edges),
             'step_count': self.step_count,
-            'is_terminated': self.terminated
+            'is_terminated': self.terminated,
+            'vertex_states': self._get_vertex_states()  # 🚀 KEY: Return precomputed data
         }
+
         
     def _get_charge(self, edge: Dict) -> float:
         p = PhysicsConstants.get_particle_by_id(edge['particle_id'])

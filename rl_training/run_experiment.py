@@ -3,6 +3,10 @@ Main Entry Point for Feynman-GCPN V8 Experiments
 Conservation Law Discovery through Reinforcement Learning
 """
 
+# Fix OpenMP duplicate library error on Windows
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import argparse
 import torch
 import sys
@@ -15,7 +19,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config import Config, QuickTestConfig
 from models import FeynmanGCPN
 from feynman_env import FeynmanDiagramEnv
-from training import PPOTrainer
+from parallel_env import make_parallel_envs  # NEW: 并行环境
+from training import OptimizedPPOTrainer
 from evaluator import ConservationLawEvaluator
 from particle_utils import get_particle_list, validate_reaction, get_reaction_string
 from physics_engine import PhysicsConstants
@@ -38,6 +43,8 @@ def parse_args():
                       help='Device (auto/cpu/cuda)')
     parser.add_argument('--reaction', type=str, default=None,
                       help='Single reaction to train on (e.g., "mu->e+nu_e_bar+nu_mu")')
+    parser.add_argument('--num-envs', type=int, default=8,
+                      help='Number of parallel environments (default: 8, recommended: 8-12)')
 
     return parser.parse_args()
 
@@ -117,6 +124,7 @@ def main():
     print(f"  Total steps: {config.total_steps:,}")
     print(f"  Batch size: {config.batch_size}")
     print(f"  Learning rate: {config.learning_rate}")
+    print(f"  Parallel environments: {args.num_envs}")  # NEW
     print(f"  Embedding: Fixed={config.fixed_dim} (Q,L) + Learnable={config.learnable_dim}")
     print(f"  Physics penalty λ: {config.physics_penalty}")
     print(f"  Sparsity weight: {config.sparsity_weight}")
@@ -134,21 +142,43 @@ def main():
             print(f"❌ Invalid reaction: {errors}")
             return
 
-        env = FeynmanDiagramEnv(
+        # NEW: 使用并行环境
+        print(f"Creating {args.num_envs} parallel environments...")
+        parallel_env = make_parallel_envs(
+            initial_state=initial,
+            final_state=final,
+            num_envs=args.num_envs,
+            max_vertices=config.max_vertices,
+            max_steps=config.max_steps,
+            reward_weights=config.known_laws_reward
+        )
+        # 保留单环境引用用于multi-task training
+        single_env = FeynmanDiagramEnv(
             initial_state=initial,
             final_state=final,
             max_vertices=config.max_vertices,
             max_steps=config.max_steps,
             reward_weights=config.known_laws_reward
         )
-        envs = [env]
+        envs = [single_env]
     else:
         # Multi-reaction training (default)
         envs = create_training_envs(config)
+        if not envs:
+            print("❌ No valid environments created")
+            return
 
-    if not envs:
-        print("❌ No valid environments created")
-        return
+        # NEW: 使用第一个reaction创建并行环境用于实际训练
+        first_reaction = config.get_training_reactions()[0]
+        print(f"\nCreating {args.num_envs} parallel environments for: {first_reaction['name']}")
+        parallel_env = make_parallel_envs(
+            initial_state=first_reaction['initial'],
+            final_state=first_reaction['final'],
+            num_envs=args.num_envs,
+            max_vertices=config.max_vertices,
+            max_steps=config.max_steps,
+            reward_weights=config.known_laws_reward
+        )
 
     # Create model
     print("\n🧠 Building Feynman-GCPN V8 model...")
@@ -174,9 +204,9 @@ def main():
 
     # Create trainer
     print("\n⚙️  Initializing PPO trainer...")
-    # Use first env for trainer (will cycle through all envs during training)
-    trainer = PPOTrainer(
-        env=envs[0],
+    # NEW: 使用并行环境
+    trainer = OptimizedPPOTrainer(
+        parallel_env=parallel_env,  # 使用并行环境而非单环境
         model=model,
         device=device,
         learning_rate=config.learning_rate,
@@ -185,15 +215,17 @@ def main():
         clip_epsilon=config.clip_epsilon,
         value_coef=config.value_coef,
         entropy_coef=config.entropy_coef,
-        batch_size=config.batch_size,
-        epochs_per_update=4
+        mini_batch_size=config.batch_size,
+        epochs_per_update=4,
+        num_envs=args.num_envs  # 指定并行环境数量
     )
 
     # Store all envs for multi-task training
     trainer.training_envs = envs
+    trainer.vis_env = envs[0]  # 用于可视化的单环境引用
 
     print("\n✅ Setup complete!")
-    print(f"  Training on {len(envs)} reactions")
+    print(f"  Training on {len(envs)} reactions with {args.num_envs} parallel workers")
     print(f"  Output directory: {output_dir}")
 
     # Start training
@@ -201,10 +233,24 @@ def main():
     print("🚂 Starting Training...")
     print("=" * 80 + "\n")
 
+    # PERFORMANCE: Adaptive rollout steps
+    # Smaller rollout_steps for large num_envs to reduce Python loop overhead
+    if args.num_envs >= 256:
+        rollout_steps = 128  # Large batch: reduce rollout overhead
+    elif args.num_envs >= 64:
+        rollout_steps = 256  # Medium batch: balanced
+    else:
+        rollout_steps = 512  # Small batch: maximize GPU batch size
+    
+    print(f"📊 Performance Settings:")
+    print(f"  Rollout steps: {rollout_steps} (adaptive based on num_envs={args.num_envs})")
+    print(f"  Batch size per rollout: {rollout_steps * args.num_envs:,}")
+    print()
+
     trainer.train(
         total_timesteps=config.total_steps,
-        rollout_steps=512,
-        log_interval=100,
+        rollout_steps=rollout_steps,  # Adaptive
+        log_interval=1,
         save_interval=config.checkpoint_interval,
         checkpoint_dir=str(output_dir / "checkpoints"),
         log_dir=str(output_dir / "logs")

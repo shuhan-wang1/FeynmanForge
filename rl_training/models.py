@@ -270,11 +270,13 @@ class FeynmanMPNN(nn.Module):
         
         # Global graph embedding (mean pooling)
         if hasattr(data, 'batch'):
-            graph_emb = global_mean_pool(x, data.batch)
+            graph_emb = global_mean_pool(x, data.batch)  # [num_graphs, hidden_dim]
         else:
-            graph_emb = x.mean(dim=0, keepdim=True)
+            graph_emb = x.mean(dim=0, keepdim=True)  # [1, hidden_dim]
         
-        return x, graph_emb.squeeze(0)
+        # ✅ BUG FIX 10: Always return 2D tensor [batch_size, hidden_dim]
+        # Don't squeeze - let callers handle dimensions explicitly
+        return x, graph_emb  # graph_emb is always [batch_size, hidden_dim]
 
 
 class MetaPhysicsGate(nn.Module):
@@ -295,19 +297,28 @@ class MetaPhysicsGate(nn.Module):
         self,
         split_mask: SplitConservationMask,
         lambda_penalty: float = 5.0,
-        temperature: float = 1.0
+        temperature: float = 1.0,
+        delta_clip: float = 10.0,  # ✅ 添加delta裁剪阈值
+        max_penalty: float = 50.0,  # ✅ 最大penalty值
+        min_gate_value: float = 1e-6  # ✅ 最小gate值
     ):
         """
         Args:
             split_mask: The split conservation mask (α)
             lambda_penalty: Scaling factor λ for conservation violations
             temperature: Temperature for soft gating
+            delta_clip: Maximum delta value (prevent gradient vanishing)
+            max_penalty: Maximum total penalty (prevent exp underflow)
+            min_gate_value: Minimum gate value (prevent log(0))
         """
         super().__init__()
 
         self.split_mask = split_mask
         self.lambda_penalty = lambda_penalty
         self.temperature = temperature
+        self.delta_clip = delta_clip
+        self.max_penalty = max_penalty
+        self.min_gate_value = min_gate_value
     
     def compute_embedding_mismatch(
         self,
@@ -346,6 +357,8 @@ class MetaPhysicsGate(nn.Module):
     ) -> torch.Tensor:
         """
         Compute Meta-Physics Gate value: Γ = exp(-λ Σ_k α_k Δ_k²)
+        
+        ✅ FIXED: Added numerical stability protections
 
         Args:
             incoming_embeddings: [N_in, D] embeddings of incoming particles
@@ -359,13 +372,23 @@ class MetaPhysicsGate(nn.Module):
 
         # Compute mismatch per dimension
         delta = self.compute_embedding_mismatch(incoming_embeddings, outgoing_embeddings)
+        
+        # ✅ FIX 1: 裁剪delta防止极端值导致梯度消失
+        delta = torch.clamp(delta, max=self.delta_clip)
 
         # Weighted penalty: α_k * Δ_k²
         weighted_penalty = alpha * (delta ** 2)
         total_penalty = weighted_penalty.sum()
+        
+        # ✅ FIX 2: 裁剪total_penalty防止exp(-大值)下溢
+        # exp(-50) ≈ 2e-22 (接近float32极限)
+        total_penalty = torch.clamp(total_penalty, max=self.max_penalty)
 
         # Exponential gate
         gate_value = torch.exp(-self.lambda_penalty * total_penalty / self.temperature)
+        
+        # ✅ FIX 3: 确保gate_value有下界，防止后续log(gate_value)产生-inf
+        gate_value = torch.clamp(gate_value, min=self.min_gate_value)
 
         return gate_value
 
@@ -424,7 +447,8 @@ class PhysicsGatedPolicyHead(nn.Module):
         self,
         graph_embedding: torch.Tensor,
         vertex_states: Optional[List[Dict]] = None,
-        apply_physics_gate: bool = True
+        apply_physics_gate: bool = True,
+        step_count: int = 0  # ✅ EARLY TERMINATION PENALTY: Add step_count parameter
     ) -> Dict[str, torch.Tensor]:
         """
         Forward pass with Meta-Physics Gate
@@ -433,6 +457,7 @@ class PhysicsGatedPolicyHead(nn.Module):
             graph_embedding: [embedding_dim] graph representation
             vertex_states: Current vertex states for gate computation
             apply_physics_gate: Whether to apply Meta-Physics Gate (set False during rollout)
+            step_count: Current step count for early termination penalty
 
         Returns:
             Dictionary with action logits, probabilities, and gate values
@@ -452,6 +477,12 @@ class PhysicsGatedPolicyHead(nn.Module):
             # Modulate particle logits: log π' = log π + log Γ
             # (equivalent to π' = π · Γ, but numerically stable)
             particle_logits = particle_logits + torch.log(gate_values + 1e-8)
+
+        # ✅ EARLY TERMINATION PENALTY: Block Termination Action if step_count < 2
+        # ACTION_TERMINATE = 3 (the last action type)
+        if step_count < 2:
+            # Set termination logit to -inf to make probability ~0
+            action_type_logits[..., 3] = float('-inf')
 
         # Softmax to get probabilities
         action_type_probs = F.softmax(action_type_logits, dim=-1)
@@ -489,15 +520,23 @@ class PhysicsGatedPolicyHead(nn.Module):
         incoming_edges = vertex_state.get('incoming', [])
         outgoing_edges = vertex_state.get('outgoing', [])
 
-        # Get embeddings for incoming/outgoing particles
+        # ✅ BUG FIX 11: Get particle IDs AND is_anti flags
         incoming_particle_ids = [e.get('particle_id', 'photon') for e in incoming_edges]
+        incoming_is_anti = [e.get('is_anti', False) for e in incoming_edges]
+        
         outgoing_particle_ids = [e.get('particle_id', 'photon') for e in outgoing_edges]
+        outgoing_is_anti = [e.get('is_anti', False) for e in outgoing_edges]
 
         # Convert to indices and get embeddings
         if incoming_particle_ids:
             incoming_indices = torch.tensor([self.particle_list.index(pid) for pid in incoming_particle_ids],
                                            device=self.particle_embedding.learnable_embedding.device)
             incoming_embs = self.particle_embedding(incoming_indices)
+            
+            # ✅ BUG FIX 11: Flip antiparticle embeddings (ALL dimensions)
+            for i, is_anti in enumerate(incoming_is_anti):
+                if is_anti:
+                    incoming_embs[i] *= -1
         else:
             incoming_embs = torch.zeros(1, self.particle_embedding.total_dim,
                                        device=self.particle_embedding.learnable_embedding.device)
@@ -506,6 +545,11 @@ class PhysicsGatedPolicyHead(nn.Module):
             outgoing_indices = torch.tensor([self.particle_list.index(pid) for pid in outgoing_particle_ids],
                                            device=self.particle_embedding.learnable_embedding.device)
             outgoing_embs = self.particle_embedding(outgoing_indices)
+            
+            # ✅ BUG FIX 11: Flip antiparticle embeddings (ALL dimensions)
+            for i, is_anti in enumerate(outgoing_is_anti):
+                if is_anti:
+                    outgoing_embs[i] *= -1
         else:
             outgoing_embs = torch.zeros(1, self.particle_embedding.total_dim,
                                        device=self.particle_embedding.learnable_embedding.device)
@@ -527,6 +571,175 @@ class PhysicsGatedPolicyHead(nn.Module):
             gate_values[i] = gate_value
 
         return gate_values
+    
+    def _compute_physics_gate_values_batched(self, vertex_states_list: List[List[Dict]]) -> torch.Tensor:
+        """
+        🚀 VECTORIZED: Compute gate values for all envs × all particles in one GPU call
+        
+        OLD: 2000 Python loops (100 envs × 20 particles)
+        NEW: 1 matrix operation
+        
+        Returns:
+            gate_values: [num_envs, num_particle_types]
+        """
+        num_envs = len(vertex_states_list)
+        device = self.particle_embedding.learnable_embedding.device
+        
+        # 1. Pre-compute all particle embeddings: [num_particle_types, embed_dim]
+        all_particle_indices = torch.arange(self.num_particle_types, device=device)
+        all_particle_embs = self.particle_embedding(all_particle_indices)
+        
+        # 2. Batch collect incoming/outgoing embedding sums for each env
+        incoming_sums = []
+        outgoing_sums = []
+        
+        for vertex_states in vertex_states_list:
+            # ✅ FIX Bug A: Don't hardcode [0] - use the FIRST vertex that has particles
+            # This allows the Physics Gate to check conservation at the appropriate vertex
+            vertex_state = None
+            if vertex_states:
+                # Find first non-empty vertex (has incoming or outgoing particles)
+                for vs in vertex_states:
+                    if vs.get('incoming') or vs.get('outgoing'):
+                        vertex_state = vs
+                        break
+                # Fallback if all vertices are empty
+                if vertex_state is None:
+                    vertex_state = vertex_states[0] if vertex_states else {'incoming': [], 'outgoing': []}
+            else:
+                vertex_state = {'incoming': [], 'outgoing': []}
+            
+            # Incoming sum
+            in_ids = [e.get('particle_id', 'photon') for e in vertex_state.get('incoming', [])]
+            in_is_anti = [e.get('is_anti', False) for e in vertex_state.get('incoming', [])]  # ✅ BUG FIX 2a
+            
+            if in_ids:
+                in_idx = torch.tensor([self.particle_list.index(p) for p in in_ids], device=device)
+                in_embs = self.particle_embedding(in_idx)  # [N_in, embed_dim]
+                
+                # ✅ BUG FIX 9: Flip ALL dimensions for antiparticles
+                # Antiparticles have OPPOSITE quantum numbers: Q → -Q, L → -L, B → -B
+                # Since learnable dims may encode B (which we want model to discover),
+                # they must also be flipped for antiparticles!
+                for i, is_anti in enumerate(in_is_anti):
+                    if is_anti:
+                        in_embs[i] *= -1  # Flip ALL dimensions, not just fixed!
+                
+                in_sum = in_embs.sum(dim=0)
+            else:
+                in_sum = torch.zeros(self.particle_embedding.total_dim, device=device)
+            incoming_sums.append(in_sum)
+            
+            # Outgoing sum
+            out_ids = [e.get('particle_id', 'photon') for e in vertex_state.get('outgoing', [])]
+            out_is_anti = [e.get('is_anti', False) for e in vertex_state.get('outgoing', [])]  # ✅ BUG FIX 2a
+            
+            if out_ids:
+                out_idx = torch.tensor([self.particle_list.index(p) for p in out_ids], device=device)
+                out_embs = self.particle_embedding(out_idx)  # [N_out, embed_dim]
+                
+                # ✅ BUG FIX 9: Flip ALL dimensions for antiparticles
+                for i, is_anti in enumerate(out_is_anti):
+                    if is_anti:
+                        out_embs[i] *= -1  # Flip ALL dimensions, not just fixed!
+                
+                out_sum = out_embs.sum(dim=0)
+            else:
+                out_sum = torch.zeros(self.particle_embedding.total_dim, device=device)
+            outgoing_sums.append(out_sum)
+        
+        # Stack: [num_envs, embed_dim]
+        incoming_batch = torch.stack(incoming_sums)
+        outgoing_batch = torch.stack(outgoing_sums)
+        
+        # 3. Vectorized computation of delta for all env×particle combinations
+        # delta[i,j,k] = incoming[i,k] - (outgoing[i,k] + particle[j,k])
+        # Using broadcasting: [num_envs, 1, D] - [num_envs, 1, D] - [1, num_particles, D]
+        delta = incoming_batch.unsqueeze(1) - outgoing_batch.unsqueeze(1) - all_particle_embs.unsqueeze(0)
+        # delta: [num_envs, num_particle_types, embed_dim]
+        
+        # 4. Compute gate: exp(-λ * Σ_k α_k * δ_k²)
+        alpha = self.meta_physics_gate.split_mask()  # [embed_dim]
+        weighted_penalty = alpha * (delta ** 2)  # [num_envs, num_particles, embed_dim]
+        total_penalty = weighted_penalty.sum(dim=-1)  # [num_envs, num_particles]
+        
+        # ✅ FIX Bug B: Add missing temperature division for proper constraint scaling
+        gate_values = torch.exp(-self.meta_physics_gate.lambda_penalty * total_penalty / self.meta_physics_gate.temperature)
+        
+        return gate_values  # [num_envs, num_particle_types]
+    
+    def forward_batch(
+        self,
+        graph_embeddings: torch.Tensor,
+        vertex_states_list: Optional[List[List[Dict]]] = None,
+        apply_physics_gate: bool = True,
+        step_counts: Optional[torch.Tensor] = None  # ✅ EARLY TERMINATION PENALTY: [num_envs]
+    ) -> Dict[str, torch.Tensor]:
+        """
+        🚀 OPTIMIZED: Batched forward pass for multiple environments
+        
+        This is the KEY OPTIMIZATION - processes all environments in a single GPU call
+        instead of looping through them sequentially.
+        
+        Args:
+            graph_embeddings: [num_envs, embedding_dim] batched graph representations
+            vertex_states_list: List of vertex_states for each environment (for Physics Gate)
+            apply_physics_gate: Whether to apply Meta-Physics Gate 
+            step_counts: [num_envs] tensor of current step counts for early termination penalty
+            
+        Returns:
+            Dictionary with batched outputs:
+                - action_type_logits: [num_envs, num_action_types]
+                - action_type_probs: [num_envs, num_action_types]
+                - vertex_logits: [num_envs, max_vertices]
+                - vertex_probs: [num_envs, max_vertices]
+                - particle_logits: [num_envs, num_particle_types]
+                - particle_probs: [num_envs, num_particle_types]
+                - gate_values: [num_envs, num_particle_types] (if apply_physics_gate)
+        """
+        num_envs = graph_embeddings.shape[0]
+        
+        # Batch process neural network outputs (FAST on GPU!)
+        action_type_logits = self.action_type_head(graph_embeddings)  # [num_envs, num_action_types]
+        vertex_logits = self.vertex_head(graph_embeddings)  # [num_envs, max_vertices]
+        particle_logits = self.particle_head(graph_embeddings)  # [num_envs, num_particle_types]
+        
+        # 🚀 V8 VECTORIZED: Single GPU call instead of 2000 Python loops!
+        gate_values_batch = None
+        if apply_physics_gate and vertex_states_list is not None:
+            # ONE matrix operation replaces 100 envs × 20 particles loops
+            gate_values_batch = self._compute_physics_gate_values_batched(vertex_states_list)
+            
+            # Modulate particle logits: log π' = log π + log Γ
+            particle_logits = particle_logits + torch.log(gate_values_batch + 1e-8)
+        
+        # ✅ EARLY TERMINATION PENALTY: Block Termination Action for envs with step_count < 2
+        # ACTION_TERMINATE = 3 (the last action type)
+        if step_counts is not None:
+            # Create mask: True for envs where step_count < 2
+            early_mask = step_counts < 2  # [num_envs]
+            # Set termination logit to -inf for these envs
+            action_type_logits[early_mask, 3] = float('-inf')
+        
+        # Softmax to get probabilities (batched)
+        action_type_probs = F.softmax(action_type_logits, dim=-1)
+        vertex_probs = F.softmax(vertex_logits, dim=-1)
+        particle_probs = F.softmax(particle_logits, dim=-1)
+        
+        output = {
+            'action_type_logits': action_type_logits,
+            'action_type_probs': action_type_probs,
+            'vertex_logits': vertex_logits,
+            'vertex_probs': vertex_probs,
+            'particle_logits': particle_logits,
+            'particle_probs': particle_probs
+        }
+        
+        if gate_values_batch is not None:
+            output['gate_values'] = gate_values_batch
+        
+        return output
+
 
 
 class ValueHead(nn.Module):
@@ -631,7 +844,8 @@ class FeynmanGCPN(nn.Module):
         self,
         data: Data,
         vertex_states: Optional[List[Dict]] = None,
-        return_value: bool = True
+        return_value: bool = True,
+        step_count: int = 0  # ✅ EARLY TERMINATION PENALTY: Add step_count parameter
     ) -> Dict[str, torch.Tensor]:
         """
         Full forward pass
@@ -640,6 +854,7 @@ class FeynmanGCPN(nn.Module):
             data: PyG Data object
             vertex_states: Quantum number states for physics gating
             return_value: Whether to compute value estimate
+            step_count: Current step count for early termination penalty
             
         Returns:
             Dictionary with policy outputs and optionally value
@@ -647,18 +862,27 @@ class FeynmanGCPN(nn.Module):
         # Encode graph
         node_embeddings, graph_embedding = self.encoder(data)
         
-        # Policy
-        policy_output = self.policy_head(graph_embedding, vertex_states)
+        # ✅ BUG FIX 10b: Handle 2D graph_embedding from encoder
+        # encoder now always returns [batch_size, hidden_dim]
+        # For single sample forward, squeeze to [hidden_dim]
+        if graph_embedding.shape[0] == 1:
+            graph_embedding_1d = graph_embedding.squeeze(0)
+        else:
+            graph_embedding_1d = graph_embedding
+        
+        # Policy (single sample version expects 1D)
+        # ✅ EARLY TERMINATION PENALTY: Pass step_count to policy_head
+        policy_output = self.policy_head(graph_embedding_1d, vertex_states, step_count=step_count)
         
         output = {
             'node_embeddings': node_embeddings,
-            'graph_embedding': graph_embedding,
+            'graph_embedding': graph_embedding,  # Keep original 2D for consistency
             **policy_output
         }
         
         # Value
         if return_value:
-            value = self.value_head(graph_embedding)
+            value = self.value_head(graph_embedding)  # value_head can handle both 1D and 2D
             output['value'] = value
         
         return output

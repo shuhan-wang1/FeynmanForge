@@ -1,7 +1,0 @@
-torch
-torch-geometric
-gymnasium
-numpy
-tensorboard
-tqdm
-matplotlib
