@@ -196,9 +196,11 @@ This create a standard experiment setup. For quick test of debugging, use
 ```python run_experiment.py --quick --num-envs 16```
 
 ### Key arguments:
-Argument,Default,Description
-`--num-envs`,8,Crucial for speed. Number of parallel CPU workers. Set to 128 for your i7.
-`--steps`,1M,Total environment steps to train.
-`--learnable-dim`,6,Dimensions in the embedding vector reserved for discovering new laws.
-`--device`,auto,cuda or cpu.
-`--quick`,False,Reduces network size and steps for rapid debugging.
+| Argument          | Default | Description                                                |
+|-------------------|---------|------------------------------------------------------------|
+| `--num-envs`      | 8       | Crucial for speed. Number of parallel CPU workers. Set to 128 for your i7. |
+| `--steps`         | 1M      | Total environment steps to train.                          |
+| `--learnable-dim` | 6       | Dimensions in the embedding vector reserved for discovering new laws. |
+| `--device`        | auto    | cuda or cpu.                                               |
+| `--quick`         | False   | Reduces network size and steps for rapid debugging.        |
+
