@@ -170,3 +170,35 @@ After finding out the layering on the $x$ axis, we need find out the ordering on
 Map the layering and ordering to the actual $(x,y)$ coordinates on the canvas. For the Penguin Diagram, such as in the B meson decay, where weak interaction happened twice, system will recognize the loop structure and assign coordinates accordingly.
 ### Drawing:
 Canvas will draw the particles according to their id, colour, isAnti, ... properties. For example, quarks are solid lines, gluons are curly lines, photons are wavy lines, etc. Finally, at the end stage system will call the validation engine to check the physics rules such as colour charge, lepton number, baryon number conservation at each vertex. If AI is generating wrong diagram, the system will capture and notify AI generate feature failed, then provide the error message to AI for next attempt. After such `for` loop of attempts (default 3 times), if still cannot get a valid diagram, the system will notify user to redraw manually.
+
+# New Updates Feynman-GCPN(v8.1): Now this project shifts to test if AI can finds the Underlying Physics rules
+
+## Project Overview:
+Feynman-GCPN (Graph Convolutional Policy Network) is a Deep Reinforcement Learning framework designed to construct valid Feynman diagrams designed by Shuhan Wang. Its scientific goal is Conservation Law Discovery: the agent is given knowledge of some physics rules (Charge, Lepton number) but must discover hidden rules (like Baryon number conservation) purely by trial-and-error to satisfy a sparse "validity" reward. For mathematical rigourous explaination, please see `rl_training/README.md`.
+
+## Hardware Requirements & Performance Tuning
+The project uses Multiprocessing for environments (CPU-heavy) and CUDA for the Neural Network updates (GPU-heavy).
+
+Recommended settings (for 128 parallel environments):
+Based on an Intel i7-12700H(14 cores), 32 GB RAM, and RTX 3060 laptop (6GB):
+- Recommended: 64 or 128 (--num-envs)
+- Memory Footprint: 128 environments occupy ~ 15GB RAM
+- VRAM Usage: 128 environments occupy ~ 3GB VRAM
+- Tip: If you run out of RAM, decrease --num-envs to 64. If GPU usage is low, increase `--batch-size` in `config.py` (default is adaptively depends on your `num-envs` arg.)
+
+## How to Run
+The main entry point for this experiment is `rl_training/run_experiment.py`.
+### Basic Command:
+```python run_experiment.py --steps 1000000 --num-envs 128 --output results/experiment_1```
+
+This create a standard experiment setup. For quick test of debugging, use
+
+```python run_experiment.py --quick --num-envs 16```
+
+### Key arguments:
+Argument,Default,Description
+`--num-envs`,8,Crucial for speed. Number of parallel CPU workers. Set to 128 for your i7.
+`--steps`,1M,Total environment steps to train.
+`--learnable-dim`,6,Dimensions in the embedding vector reserved for discovering new laws.
+`--device`,auto,cuda or cpu.
+`--quick`,False,Reduces network size and steps for rapid debugging.
