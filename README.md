@@ -4,7 +4,7 @@ Feynman Forge is a browser-based suite for particle physics visualization, featu
 
 This project provides a set of tools designed for students and enthusiasts to draw, validate, and understand the interactions of the Standard Model.
 
-## Core Features
+## 1. Core Features
 
 * **Feynman Diagram Editor:** A full-featured, canvas-based editor for manually drawing diagrams.
 * **Real-time Physics Validation:** Automatically validates diagrams at each vertex based on conservation laws (charge, lepton/baryon number, color charge).
@@ -12,17 +12,17 @@ This project provides a set of tools designed for students and enthusiasts to dr
 * **Fundamental Force Visualization:** A separate, interactive module to visualize the Strong, Weak, Electromagnetic, and Gravitational forces, as well as the Higgs mechanism.
 * **Multi-Canvas Management:** A complete system for creating, naming, duplicating, switching, and exporting/importing multiple diagram canvases.
 
-## Inspiration and Credit
+## 2. Inspiration and Credit
 
 This project is inspired by the implementations, setups of **FeynCraft** (arXiv:2510.14082v1). I really enjoyed in this game of drawing Feynman diagrams to helps my exam.
 
 The core idea of an interactive, browser-based tool that provides real-time feedback on vertex validity was a foundational concept that we adapted. While FeynCraft features its own internal logic for problem generation, our implementation explores a new approach by integrating a modern Large Language Model (Gemini) to achieve a similar goal: allowing users to specify a process and receive a valid, generated Feynman diagram.
 
-## ✨ AI-Powered Diagram Generation
+## 3. ✨ AI-Powered Diagram Generation (Currently disabled - See section 4 for the update)
 
 The standout feature of Feynman Forge is its ability to automatically generate diagrams using AI. You can provide a simple reaction, and the system will query the Gemini AI to generate all valid lowest-order diagrams and draw them on the canvas.
 
-### How to Use the AI Feature
+### 3.1 How to Use the AI Feature
 
 1. **Open the AI Panel:** In the `feymann.html` editor, click the **"AI Generate"** (`AI 生成`) button in the top header.
 2. **Set Your API Key:** The first time you use this feature, you must provide a Gemini API Key.
@@ -36,7 +36,7 @@ The standout feature of Feynman Forge is its ability to automatically generate d
 
 **The current model that was been is Gemini-2.5-pro, according to my empirical test, it always have hard time for complicated reactions especially in Strong interaction (as the colour charge conservation is always been violated).**
 
-### AI Input Format
+### 3.2 AI Input Format
 
 The AI parser (`gemini-integration.js`) requires a specific format to understand your reaction.
 
@@ -46,7 +46,7 @@ The AI parser (`gemini-integration.js`) requires a specific format to understand
 * The initial and final states **must** be separated by `$->$`.
 * Spaces between particles and `+` signs are recommended.
 
-#### Supported Particle Symbols
+### 3.3 Supported Particle Symbols
 
 Here is a list of common supported particle symbols, derived from the `PARTICLE_SYMBOLS` map in `gemini-integration.js`:
 
@@ -72,7 +72,7 @@ Here is a list of common supported particle symbols, derived from the `PARTICLE_
 |                          | Z Boson            | `$Z$` or `$Z0$`         |
 |                          | Higgs Boson        | `$H$` or `$higgs$`      |
 
-#### Examples
+### 3.4.1 Examples
 
 Here are some valid inputs you can try:
 
@@ -80,9 +80,9 @@ Here are some valid inputs you can try:
 * `$u_red$ + $ubar_anti-red$ $->$ $gluon$ + $gluon$` (Quark-antiquark annihilation to gluons)
 * `$gamma$ + $e-$ $->$ $gamma$ + $e-$` (Compton scattering)
 
-## Other Features
+### 3.5 Other Features
 
-### Manual Drawing & Validation
+#### 3.5.1 Manual Drawing & Validation
 
 (Powered by `feynman-logic.js`)
 
@@ -99,7 +99,7 @@ The core of the application is a manual editor where you can draw your own diagr
   * Vertex Dimensionality (prevents non-physical vertices)
   * Interaction Rules (e.g., photons only couple to charge)
 
-### Force Visualization
+#### 3.5.2Force Visualization
 
 (Powered by `force_visualization_desktop.html` & `force-viz-logic.js`)
 
@@ -111,7 +111,7 @@ This is a separate educational module, accessible from `start.html`, that provid
 * **Gravity:** Demonstrates the curvature of spacetime and gravitational waves.
 * **Higgs Mechanism:** Shows how the Higgs field gives mass to particles.
 
-### Canvas Management
+#### 3.5.3 Canvas Management
 
 (Powered by `canvas-manager.js` & `canvas-manager-ui.js`)
 
@@ -121,7 +121,7 @@ You can work on multiple diagrams at once using the canvas management system.
 * **Auto-Save:** All your diagrams are automatically saved to your browser's local storage.
 * **Export/Import:** You can export all your canvases to a single JSON file as a backup, and re-import them later.
 
-## How to Run
+### 3.6 How to Run
 
 This is a static, frontend-only application. No server or build-step is required.
 
@@ -129,26 +129,26 @@ This is a static, frontend-only application. No server or build-step is required
 2. Open the `start.html` file in a modern web browser.
 3. Choose one of the two modules to begin.
 
-## Examples:
+#### 3.6.1  Examples:
 
-### beta+ decay (weak interaction for up quark)
+**beta+ decay (weak interaction for up quark)**
 
 ![1763325627925](image/README/1763325627925.png)
 
-### Up and anti-up quark annihilation (via strong interaction)
+**Up and anti-up quark annihilation (via strong interaction)**
 ![1763401984864](image/README/1763401984864.png)
 ![1763406960151](image/README/1763406960151.png)
 
 ![1763406936482](image/README/1763406936482.png)
 
-# How AI generate diagram works:
-## Stage 1: Input parsing and prompt engineering
+### 3.7 How AI generate diagram works:
+#### 3.7.1 Stage 1: Input parsing and prompt engineering
 **Input:** The system will first extract user's input and find out initial and final state particles. The prompt is design to provide 3-fold answers. 
    1. Chain of thought: Ask model to think step by step how is the interaction, conservation laws works.
    2. Graph vector: Ask model to provide a graph vector representation of the Feynman diagram, forbidding any $(x,y)$ coordinate output. Forcing model to focus the topological structure of the physical interaction.
    3. Constraints check: Check if the output particles can maps to the existing particle chart making sure following program can read the output.
 
-## Stage 2: Graph Vector model:
+#### 3.7.2 Stage 2: Graph Vector model:
 Gemini's output is a Directed Acyclic Graph (DAG) representation of the Feynman diagram. Each node represents a vertex, and edges represent particles. 
 
 For every nodes in the graph, it contains the following properties:
@@ -160,23 +160,23 @@ For every edges in the graph, it contains the following properties:
     2. target
     3. particle (id, spin, color, isAnti, isVirtual,...)
 
-## Stage 3: Layout algorithm:
+#### 3.7.3 Stage 3: Layout algorithm:
 Use Sugiyama Framework to generate a layout for the given graph vectors. 
-### Layering:
+#### 3.7.4 Layering:
 Find out the layers of the graph on $x$ axis (as we define from left to right is how time flows). Let the initial state particles on the Layer 0, final stage particles on the MaxLayer. If $u\to v$ then $Layer(v) \ge Layer(u) + 1$. 
-### Crossing Reduction:
+#### 3.7.5 Crossing Reduction:
 After finding out the layering on the $x$ axis, we need find out the ordering on the $y$ axis. Use Barycenter Heuristic to calculate optimal position relative to the previous layer. Continue the iteration till the local optimizer.
-### Coordinate Assignment:
+#### 3.7.6 Coordinate Assignment:
 Map the layering and ordering to the actual $(x,y)$ coordinates on the canvas. For the Penguin Diagram, such as in the B meson decay, where weak interaction happened twice, system will recognize the loop structure and assign coordinates accordingly.
-### Drawing:
+#### 3.7.7 Drawing:
 Canvas will draw the particles according to their id, colour, isAnti, ... properties. For example, quarks are solid lines, gluons are curly lines, photons are wavy lines, etc. Finally, at the end stage system will call the validation engine to check the physics rules such as colour charge, lepton number, baryon number conservation at each vertex. If AI is generating wrong diagram, the system will capture and notify AI generate feature failed, then provide the error message to AI for next attempt. After such `for` loop of attempts (default 3 times), if still cannot get a valid diagram, the system will notify user to redraw manually.
 
-# New Updates Feynman-GCPN(v8.1): Now this project shifts to test if AI can finds the Underlying Physics rules
+# 4. New Updates Feynman-GCPN(v8.1, v8.2 finished but waiting for further tests): Now this project shifts to test if AI can finds the Underlying Physics rules
 
-## Project Overview:
+## 4.1 Project Overview:
 Feynman-GCPN (Graph Convolutional Policy Network) is a Deep Reinforcement Learning framework designed to construct valid Feynman diagrams designed by Shuhan Wang. Its scientific goal is Conservation Law Discovery: the agent is given knowledge of some physics rules (Charge, Lepton number) but must discover hidden rules (like Baryon number conservation) purely by trial-and-error to satisfy a sparse "validity" reward. For mathematical rigourous explaination, please see `rl_training/README.md`.
 
-## Hardware Requirements & Performance Tuning
+## 4.2 Hardware Requirements & Performance Tuning
 The project uses Multiprocessing for environments (CPU-heavy) and CUDA for the Neural Network updates (GPU-heavy).
 
 Recommended settings (for 128 parallel environments):
@@ -186,7 +186,7 @@ Based on an Intel i7-12700H(14 cores), 32 GB RAM, and RTX 3060 laptop (6GB):
 - VRAM Usage: 128 environments occupy ~ 3GB VRAM
 - Tip: If you run out of RAM, decrease --num-envs to 64. If GPU usage is low, increase `--batch-size` in `config.py` (default is adaptively depends on your `num-envs` arg.)
 
-## How to Run
+## 4.3 How to Run
 The main entry point for this experiment is `rl_training/run_experiment.py`.
 ### Basic Command:
 ```python run_experiment.py --steps 1000000 --num-envs 128 --output results/experiment_1```
